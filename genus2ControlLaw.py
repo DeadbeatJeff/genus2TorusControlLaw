@@ -114,10 +114,25 @@ if __name__ == "__main__":
 
     print("\nMass Matrix M (Numeric Symbolic) computed.")
 
+    # Substitute robot values and simplify
     M_simplified = sp.simplify(M.subs(rob_values))
 
-    print("Mass Matrix M (Simplified):")
-    sp.pprint(M_simplified)
+    # --- Enhanced Precision & Noise Filtering ---
+    # 1. Define a cleaner function to remove floating-point noise
+    def clean_numeric_expression(expr, threshold=1e-4, decimals=3):
+        """
+        Sets very small numbers to 0 and rounds others to specific decimal places.
+        """
+        return expr.applyfunc(lambda x: 
+            (round(float(x), decimals) if abs(x) > threshold else 0) 
+            if x.is_Number else x
+        )
+
+    # 2. Apply it to your mass matrix
+    M_rounded = clean_numeric_expression(M_simplified)
+
+    print("Mass Matrix M (Cleaned: 3 Decimal Places & Noise Removed):")
+    sp.pprint(M_rounded)
 
    # --- 6. Optimized Christoffel Symbols ---
     M_inv = M_simplified.inv()
