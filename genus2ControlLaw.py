@@ -155,6 +155,8 @@ if __name__ == "__main__":
 
     # --- 7. Optimized Riemann & Curvature ---
     RiemannContra = compute_riemann(Gamma2nd, Theta, n_joints)
+
+    print("Riemann Curvature Tensor (Contravariant) Computed.")
     
     # Directly calculate R_0101 to avoid the full 4D tensor if only K is needed
     # R_{0101} = g_{0m} * R^m_{101}
