@@ -301,6 +301,6 @@ if __name__ == "__main__":
     print(f"Calculated Euler Characteristic (chi): {euler_characteristic:.4f}")
     
     if round(average_curvature) == -1:
-        print("Success: The C-space is confirmed to be a Genus-2 surface (average curvature = -1).")
+        print("Success: The c-space is confirmed to be a genus-2 surface (average curvature = -1).")
     else:
-        print(f"Result: average curvature is approximately {round(average_curvature)}. Check metric for singularities.")
+        print(f"Result: Average curvature is approximately {round(average_curvature)}. Check metric for singularities.")
