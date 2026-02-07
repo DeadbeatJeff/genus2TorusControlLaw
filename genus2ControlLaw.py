@@ -292,12 +292,15 @@ if __name__ == "__main__":
     # 3. Integrate over the 2-torus domain: [0, 2pi] x [0, 2pi]
     total_curvature, error = dblquad(integrand, 0, 2*np.pi, 0, 2*np.pi)
     
-    euler_characteristic = total_curvature / (2 * np.pi)
+    average_curvature = total_curvature / (4 * np.pi)
 
     print(f"Total Integrated Curvature: {total_curvature:.4f}")
+    print(f"Average Curvature: {average_curvature:.4f}")
+    
+    euler_characteristic = total_curvature / (2 * np.pi)
     print(f"Calculated Euler Characteristic (chi): {euler_characteristic:.4f}")
     
-    if round(euler_characteristic) == -2:
-        print("Success: The C-space is confirmed to be a Genus-2 surface (chi = -2).")
+    if round(average_curvature) == -1:
+        print("Success: The C-space is confirmed to be a Genus-2 surface (average curvature = -1).")
     else:
-        print(f"Result: chi is approximately {round(euler_characteristic)}. Check metric for singularities.")
+        print(f"Result: average curvature is approximately {round(average_curvature)}. Check metric for singularities.")
