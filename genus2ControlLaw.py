@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 from scipy.linalg import solve_continuous_are
+from scipy.integrate import dblquad
 
 # --- 1. Global Parameters for the HJB Controller ---
 Q_mat = np.diag([10.0, 10.0, 1.0, 1.0]) 
@@ -49,6 +50,13 @@ def optimal_dynamics(t, state, target_q, Q, R_eff, M_func, get_inv_metric):
     dp2 = -(h_plus - h_minus) / (2 * eps)
     
     return [q_dot[0], q_dot[1], u[0], dp2 + u[1]]
+
+def clean_expr(expr, threshold=1e-4, decimals=3):
+    return expr.applyfunc(lambda x: 
+        (round(float(x), decimals) if abs(x) > threshold else 0) 
+        if x.is_Number else x
+    ) if hasattr(expr, 'applyfunc') else expr.subs({n: (round(float(n), decimals) if abs(n) > threshold else 0) 
+                                                    for n in expr.atoms(sp.Number)})
 
 if __name__ == "__main__":
     # --- 2. Define Variables ---
@@ -111,26 +119,8 @@ if __name__ == "__main__":
     # Substituting rob_values immediately makes all subsequent tensor math much faster
     M_numeric = sp.simplify(M.subs(rob_values))
 
-    # --- Enhanced Precision & Noise Filtering ---
-    def clean_numeric_expression(expr, threshold=1e-4, decimals=3):
-        """
-        Sets very small numbers to 0 and rounds others to specific decimal places.
-        Works for individual SymPy expressions, Matrices, and N-dim Arrays.
-        """
-        if hasattr(expr, 'applyfunc'): # For Matrices and Arrays
-            return expr.applyfunc(lambda x: 
-                (round(float(x), decimals) if abs(x) > threshold else 0) 
-                if x.is_Number else x
-            )
-        else: # For individual symbolic expressions (like K_sym)
-            return expr.subs({n: (round(float(n), decimals) if abs(n) > threshold else 0) 
-                            for n in expr.atoms(sp.Number)})
-
-    # Apply to the Mass Matrix
-    M_rounded = clean_numeric_expression(M_numeric)
-
-    print("Mass Matrix M (Cleaned: 3 Decimal Places & Noise Removed):")
-    sp.pprint(M_rounded)
+    print("\nMass Matrix (Numerical, 3DP):")
+    sp.pprint(clean_expr(M_numeric))
 
     M_inv = M_numeric.inv()
 
@@ -171,24 +161,44 @@ if __name__ == "__main__":
     R0101 = sum(M_numeric[0, m] * RiemannContra[m, 1, 0, 1] for m in range(n_joints))
     K_sym = sp.simplify(R0101 / M_numeric.det())
 
-    print("Gaussian Curvature K (Symbolic) computed:")
-    sp.pprint(K_sym)
-
-    # --- 8. Noise Cleaning & Rounding for Output ---
-    def clean_expr(expr, threshold=1e-4, decimals=3):
-        return expr.applyfunc(lambda x: 
-            (round(float(x), decimals) if abs(x) > threshold else 0) 
-            if x.is_Number else x
-        ) if hasattr(expr, 'applyfunc') else expr.subs({n: (round(float(n), decimals) if abs(n) > threshold else 0) 
-                                                        for n in expr.atoms(sp.Number)})
-
-    print("\nMass Matrix (Numerical, 3DP):")
-    sp.pprint(clean_expr(M_numeric))
-
     print("\nGaussian Curvature (Numerical, 3DP):")
     sp.pprint(clean_expr(K_sym))
 
-    # --- 8. Geodesic Control Law (Natural Geometry Path) ---
+    # --- 8. Topology Verification: Gauss-Bonnet Theorem ---
+    print("\n--- Topology Verification ---")
+    
+    # 1. Lambdify Gaussian Curvature for numerical integration
+    # Note: K_sym depends on theta4 (q[1]) and potentially theta1 (q[0])
+    K_num_func = sp.lambdify((q[0], q[1]), K_sym, "numpy")
+
+    # 2. Define the area element dA = sqrt(det(g)) d_theta1 d_theta4
+    # The mass matrix M_simplified is our metric tensor g
+    det_g_func = sp.lambdify((q[0], q[1]), M_simplified.det(), "numpy")
+
+    def integrand(t4, t1):
+        # Gaussian Curvature integral: Integral(K * dA) 
+        # dA = sqrt(det(g)) * dt1 * dt4
+        # However, for the standard Gauss-Bonnet in these coordinates:
+        # Integral(K * sqrt(det(g)) dt1 dt4)
+        return K_num_func(t1, t4) * np.sqrt(np.abs(det_g_func(t1, t4)))
+
+    # 3. Integrate over the 2-torus domain: [0, 2pi] x [0, 2pi]
+    total_curvature, error = dblquad(integrand, 0, 2*np.pi, 0, 2*np.pi)
+    
+    average_curvature = total_curvature / (4 * np.pi)
+
+    print(f"Total Integrated Curvature: {total_curvature:.4f}")
+    print(f"Average Curvature: {average_curvature:.4f}")
+    
+    euler_characteristic = total_curvature / (2 * np.pi)
+    print(f"Calculated Euler Characteristic (chi): {euler_characteristic:.4f}")
+    
+    if round(average_curvature) == -1:
+        print("Success: The c-space is confirmed to be a genus-2 surface (average curvature = -1).")
+    else:
+        print(f"Result: Average curvature is approximately {round(average_curvature)}. Check metric for singularities.")
+
+    # --- 9. Geodesic Control Law (Natural Geometry Path) ---
     def geodesic_dynamics(t, state, get_inv_metric):
         """
         Hamiltonian equations for the Geodesic (No-Cost Path):
@@ -268,39 +278,3 @@ if __name__ == "__main__":
 
     plt.tight_layout()
     plt.show()
-
-    # --- 11. Topology Verification: Gauss-Bonnet Theorem ---
-    from scipy.integrate import dblquad
-
-    print("\n--- Topology Verification ---")
-    
-    # 1. Lambdify Gaussian Curvature for numerical integration
-    # Note: K_sym depends on theta4 (q[1]) and potentially theta1 (q[0])
-    K_num_func = sp.lambdify((q[0], q[1]), K_sym, "numpy")
-
-    # 2. Define the area element dA = sqrt(det(g)) d_theta1 d_theta4
-    # The mass matrix M_simplified is our metric tensor g
-    det_g_func = sp.lambdify((q[0], q[1]), M_simplified.det(), "numpy")
-
-    def integrand(t4, t1):
-        # Gaussian Curvature integral: Integral(K * dA) 
-        # dA = sqrt(det(g)) * dt1 * dt4
-        # However, for the standard Gauss-Bonnet in these coordinates:
-        # Integral(K * sqrt(det(g)) dt1 dt4)
-        return K_num_func(t1, t4) * np.sqrt(np.abs(det_g_func(t1, t4)))
-
-    # 3. Integrate over the 2-torus domain: [0, 2pi] x [0, 2pi]
-    total_curvature, error = dblquad(integrand, 0, 2*np.pi, 0, 2*np.pi)
-    
-    average_curvature = total_curvature / (4 * np.pi)
-
-    print(f"Total Integrated Curvature: {total_curvature:.4f}")
-    print(f"Average Curvature: {average_curvature:.4f}")
-    
-    euler_characteristic = total_curvature / (2 * np.pi)
-    print(f"Calculated Euler Characteristic (chi): {euler_characteristic:.4f}")
-    
-    if round(average_curvature) == -1:
-        print("Success: The c-space is confirmed to be a genus-2 surface (average curvature = -1).")
-    else:
-        print(f"Result: Average curvature is approximately {round(average_curvature)}. Check metric for singularities.")
