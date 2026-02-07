@@ -111,10 +111,17 @@ if __name__ == "__main__":
     # Substitute values and simplify
     # Note: theta2 in the HJB section refers to the second control variable (theta4)
     M_numeric_sym = M.subs(rob_values).subs({p_vars[0]: 0, p_vars[1]: 0}) # Simplified for example
+
+    print("\nMass Matrix M (Numeric Symbolic) computed.")
+
     M_simplified = sp.simplify(M.subs(rob_values))
+
+    print("\nMass Matrix M (Simplified) computed.")
 
    # --- 6. Optimized Christoffel Symbols ---
     M_inv = M_simplified.inv()
+
+    print("Inverse of Mass Matrix M computed.")
     
     # Pre-compute derivatives: dM[k] = partial M / partial Theta[k]
     # This avoids calling sp.diff inside the nested loops
