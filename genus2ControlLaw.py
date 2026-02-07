@@ -107,84 +107,86 @@ if __name__ == "__main__":
     }
 
     print("\nMass Matrix M (Symbolic) computed.")
-    
-    # Substitute values and simplify
-    # Note: theta2 in the HJB section refers to the second control variable (theta4)
-    M_numeric_sym = M.subs(rob_values).subs({p_vars[0]: 0, p_vars[1]: 0}) # Simplified for example
 
-    print("\nMass Matrix M (Numeric Symbolic) computed.")
-
-    # Substitute robot values and simplify
-    M_simplified = sp.simplify(M.subs(rob_values))
+    # Substituting rob_values immediately makes all subsequent tensor math much faster
+    M_numeric = sp.simplify(M.subs(rob_values))
 
     # --- Enhanced Precision & Noise Filtering ---
-    # 1. Define a cleaner function to remove floating-point noise
     def clean_numeric_expression(expr, threshold=1e-4, decimals=3):
         """
         Sets very small numbers to 0 and rounds others to specific decimal places.
+        Works for individual SymPy expressions, Matrices, and N-dim Arrays.
         """
-        return expr.applyfunc(lambda x: 
-            (round(float(x), decimals) if abs(x) > threshold else 0) 
-            if x.is_Number else x
-        )
+        if hasattr(expr, 'applyfunc'): # For Matrices and Arrays
+            return expr.applyfunc(lambda x: 
+                (round(float(x), decimals) if abs(x) > threshold else 0) 
+                if x.is_Number else x
+            )
+        else: # For individual symbolic expressions (like K_sym)
+            return expr.subs({n: (round(float(n), decimals) if abs(n) > threshold else 0) 
+                            for n in expr.atoms(sp.Number)})
 
-    # 2. Apply it to your mass matrix
-    M_rounded = clean_numeric_expression(M_simplified)
+    # Apply to the Mass Matrix
+    M_rounded = clean_numeric_expression(M_numeric)
 
     print("Mass Matrix M (Cleaned: 3 Decimal Places & Noise Removed):")
     sp.pprint(M_rounded)
 
-   # --- 6. Optimized Christoffel Symbols ---
-    M_inv = M_simplified.inv()
+    M_inv = M_numeric.inv()
 
-    print("Inverse of Mass Matrix M computed.")
+    print("Inverse Mass Matrix M^-1 computed.")
     
-    # Pre-compute derivatives: dM[k] = partial M / partial Theta[k]
-    # This avoids calling sp.diff inside the nested loops
-    dM = [M_simplified.diff(Theta[k]) for k in range(n_joints)]
-    
-    print("Pre-computed derivatives of Mass Matrix M.")
+    # Pre-compute derivatives of the numerical metric w.r.t coordinates
+    # This avoids calling sp.diff dozens of times inside the loops
+    dM = [M_numeric.diff(Theta[k]) for k in range(n_joints)]
 
-    # 1. Christoffel Symbols of the First Kind [ijk]
-    # Formula: Gamma_ijk = 0.5 * (dg_ik/dxj + dg_ij/dxk - dg_jk/dxi)
+    print("Pre-computed derivatives of Mass Matrix for Christoffel Symbols.")
+
+    # --- 6. Faster Christoffel Symbols (1st and 2nd Kind) ---
     Gamma1st = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
-    for i in range(n_joints):
-        for j in range(n_joints):
-            for k in range(n_joints):
-                # We use the pre-computed derivative matrices
-                Gamma1st[i, j, k] = 0.5 * (dM[j][i, k] + dM[k][i, j] - dM[i][j, k])
-    
-    print("Christoffel Symbols (1st Kind) Computed.")
-
-    # 2. Christoffel Symbols of the Second Kind (Gamma^i_jk)
-    # Formula: Gamma^i_jk = g^il * Gamma_ljk
     Gamma2nd = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
+
     for i in range(n_joints):
         for j in range(n_joints):
             for k in range(n_joints):
-                val = 0
+                # 1st Kind: Gamma_ijk = 0.5 * (dg_ik/dxj + dg_ij/dxk - dg_jk/dxi)
+                Gamma1st[i, j, k] = 0.5 * (dM[j][i, k] + dM[k][i, j] - dM[i][j, k])
+                
+                # 2nd Kind: Gamma^i_jk = g^il * Gamma_ljk
+                gamma_val = 0
                 for l in range(n_joints):
-                    val += M_inv[i, l] * Gamma1st[l, j, k]
-                Gamma2nd[i, j, k] = val # Delaying simplify to save time
+                    gamma_val += M_inv[i, l] * Gamma1st[l, j, k]
+                Gamma2nd[i, j, k] = gamma_val
 
-    print("Christoffel Symbols (2nd Kind) Computed.")
+    print("Numerical Christoffel Symbols Computed.")
 
-    # --- 7. Optimized Riemann & Curvature ---
+    # --- 7. Optimized Curvature & Riemann ---
+    # Compute Riemann mixed tensor
     RiemannContra = compute_riemann(Gamma2nd, Theta, n_joints)
 
-    print("Riemann Curvature Tensor (Contravariant) Computed.")
+    print("Numerical Riemann Curvature Tensor Computed.")
     
-    # Directly calculate R_0101 to avoid the full 4D tensor if only K is needed
-    # R_{0101} = g_{0m} * R^m_{101}
-    R0101 = 0
-    for m in range(n_joints):
-        R0101 += M_simplified[0, m] * RiemannContra[m, 1, 0, 1]
+    # Gaussian Curvature: K = R_0101 / det(g)
+    # Only compute the specific covariant component needed for K
+    R0101 = sum(M_numeric[0, m] * RiemannContra[m, 1, 0, 1] for m in range(n_joints))
+    K_sym = sp.simplify(R0101 / M_numeric.det())
 
-    # Final simplification happens only ONCE here
-    K_sym = sp.simplify(R0101 / M_simplified.det())
-
-    print("\nGaussian Curvature (K) Symbolic Expression:")
+    print("Gaussian Curvature K (Symbolic) computed:")
     sp.pprint(K_sym)
+
+    # --- 8. Noise Cleaning & Rounding for Output ---
+    def clean_expr(expr, threshold=1e-4, decimals=3):
+        return expr.applyfunc(lambda x: 
+            (round(float(x), decimals) if abs(x) > threshold else 0) 
+            if x.is_Number else x
+        ) if hasattr(expr, 'applyfunc') else expr.subs({n: (round(float(n), decimals) if abs(n) > threshold else 0) 
+                                                        for n in expr.atoms(sp.Number)})
+
+    print("\nMass Matrix (Numerical, 3DP):")
+    sp.pprint(clean_expr(M_numeric))
+
+    print("\nGaussian Curvature (Numerical, 3DP):")
+    sp.pprint(clean_expr(K_sym))
 
     # --- 8. Geodesic Control Law (Natural Geometry Path) ---
     def geodesic_dynamics(t, state, get_inv_metric):
