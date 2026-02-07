@@ -158,15 +158,44 @@ if __name__ == "__main__":
     print("\nGaussian Curvature (K) Symbolic Expression:")
     sp.pprint(K_sym)
 
-    # --- 8. Numerical Simulation & Plotting ---
-    # Lambdify M and K w.r.t theta4 (q[1])
-    M_func_numeric = sp.lambdify(q[1], M_simplified.subs({q[0]: 0}), "numpy")
-    K_func = sp.lambdify(q[1], K_sym.subs({q[0]: 0}), "numpy")
+    # ... [Keep Sections 1 through 7 as they are] ...
 
-    def get_inverse_metric_numeric(theta_val):
-        g_num = M_func_numeric(float(theta_val))
-        return np.linalg.inv(g_num)
+    # --- 8. Geodesic Control Law (Natural Geometry Path) ---
+    def geodesic_dynamics(t, state, get_inv_metric):
+        """
+        Hamiltonian equations for the Geodesic (No-Cost Path):
+        dq/dt = g^-1 * p
+        dp/dt = -dH/dq
+        """
+        theta1, theta2, p1, p2 = state
+        p = np.array([p1, p2])
+        
+        g_inv = get_inv_metric(theta2)
+        q_dot = g_inv @ p
+        
+        # Numerical gradient of the kinetic energy (Hamiltonian) w.r.t theta4 (theta2 here)
+        eps = 1e-6
+        h_plus = 0.5 * p @ get_inv_metric(theta2 + eps) @ p
+        h_minus = 0.5 * p @ get_inv_metric(theta2 - eps) @ p
+        dp2 = -(h_plus - h_minus) / (2 * eps)
+        
+        # dp1 is 0 because the metric M doesn't depend on theta1 (axisymmetric)
+        return [q_dot[0], q_dot[1], 0, dp2]
 
+    # Initial momentum for the geodesic "push"
+    geodesic_p0 = [0.01, 0.005] 
+    y0_geodesic = [0, 0, geodesic_p0[0], geodesic_p0[1]]
+    
+    sol_geodesic = solve_ivp(
+        geodesic_dynamics, 
+        (0, 10), 
+        y0_geodesic, 
+        args=(get_inverse_metric_numeric,),
+        t_eval=np.linspace(0, 10, 500)
+    )
+    print("Geodesic Control Law (Dido move) computed.")
+
+    # --- 9. HJB Optimal Control Simulation ---
     target_conf = np.array([np.pi, 0.0])
     y0_hjb = [0, 0.1, 0, 0]
 
@@ -178,30 +207,36 @@ if __name__ == "__main__":
         t_eval=np.linspace(0, 20, 1000)
     )
 
-    # --- 9. Visualization ---
-    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+    # --- 10. Visualization ---
+    fig, axs = plt.subplots(1, 4, figsize=(22, 5))
 
-    # Plot 1: HJB Convergence
-    axs[0].plot(sol_hjb.t, sol_hjb.y[0], label=r'$\theta_1$')
-    axs[0].plot(sol_hjb.t, sol_hjb.y[1], label=r'$\theta_4$')
-    axs[0].axhline(target_conf[0], color='r', linestyle='--', alpha=0.5)
-    axs[0].set_title("HJB State Convergence")
-    axs[0].legend()
-
-    # Plot 2: Gaussian Curvature vs Configuration
+    # Plot 1: Gaussian Curvature K
     theta_vals = np.linspace(0, 2 * np.pi, 100)
     K_vals = K_func(theta_vals)
-    axs[1].plot(theta_vals, K_vals, color='blue', lw=2)
-    axs[1].set_title("Gaussian Curvature $K$ vs $\Theta_4$")
-    axs[1].set_xlabel(r"$\theta_4$ (rad)")
-    axs[1].set_ylabel("$K$")
-    axs[1].grid(True, linestyle='--')
+    axs[2].plot(theta_vals, K_vals, color='blue', lw=2)
+    axs[2].set_title("Gaussian Curvature $K$")
+    axs[2].set_xlabel(r"$\theta_4$")
+    axs[2].grid(True, linestyle='--')
 
-    # Plot 3: C-Space Path
-    axs[2].plot(sol_hjb.y[0] % (2*np.pi), sol_hjb.y[1] % (2*np.pi))
-    axs[2].set_xlabel(r'$\theta_1$')
-    axs[2].set_ylabel(r'$\theta_4$')
-    axs[2].set_title("Optimal Path on C-Space")
+    # Plot 2: Geodesic Path (The "Natural" Flow)
+    axs[0].plot(sol_geodesic.y[0] % (2*np.pi), sol_geodesic.y[1] % (2*np.pi), color='red', lw=2)
+    axs[0].set_title("Geodesic Path (Natural Flow)")
+    axs[0].set_xlabel(r'$\theta_1$')
+    axs[0].set_ylabel(r'$\theta_4$')
+    axs[0].grid(True)
+
+    # Plot 3: HJB State Convergence
+    axs[1].plot(sol_hjb.t, sol_hjb.y[0], label=r'$\theta_1$')
+    axs[1].plot(sol_hjb.t, sol_hjb.y[1], label=r'$\theta_4$')
+    axs[1].axhline(target_conf[0], color='r', linestyle='--', alpha=0.5)
+    axs[1].set_title("HJB State Convergence")
+    axs[1].legend()
+
+    # Plot 4: HJB Path on C-Space
+    axs[3].plot(sol_hjb.y[0] % (2*np.pi), sol_hjb.y[1] % (2*np.pi), color='green')
+    axs[3].set_xlabel(r'$\theta_1$')
+    axs[3].set_ylabel(r'$\theta_4$')
+    axs[3].set_title("Optimal HJB Path")
 
     plt.tight_layout()
     plt.show()
