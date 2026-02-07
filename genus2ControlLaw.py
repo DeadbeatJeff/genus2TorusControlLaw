@@ -113,51 +113,37 @@ if __name__ == "__main__":
     M_numeric_sym = M.subs(rob_values).subs({p_vars[0]: 0, p_vars[1]: 0}) # Simplified for example
     M_simplified = sp.simplify(M.subs(rob_values))
 
-    # --- 6. Christoffel & Riemann (Contravariant) ---
+    # --- 6. Optimized Christoffel Symbols ---
     M_inv = M_simplified.inv()
-    Gamma1st = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
-    for i in range(n_joints):
-        for j in range(n_joints):
-            for k in range(n_joints):
-                Gamma1st[i, j, k] = 0.5 * (sp.diff(M_simplified[i, j], Theta[k]) + 
-                                          sp.diff(M_simplified[i, k], Theta[j]) - 
-                                          sp.diff(M_simplified[j, k], Theta[i]))
     
-    print("\nChristoffel Symbols (1st Kind) Computed.")
+    # Pre-compute derivatives of the metric matrix
+    # dM[k] = partial M / partial Theta[k]
+    dM = [M_simplified.diff(Theta[k]) for k in range(n_joints)]
 
     Gamma2nd = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
     for i in range(n_joints):
         for j in range(n_joints):
             for k in range(n_joints):
-                gamma_val = 0
+                # Using the standard formula: 1/2 * g^il * (dg_lj/dxk + dg_lk/dxj - dg_jk/dxl)
+                val = 0
                 for l in range(n_joints):
-                    gamma_val += M_inv[i, l] * Gamma1st[l, j, k]
-                Gamma2nd[i, j, k] = sp.simplify(gamma_val)
+                    term = 0.5 * M_inv[i, l] * (dM[k][l, j] + dM[j][l, k] - dM[l][j, k])
+                    val += term
+                Gamma2nd[i, j, k] = val # No simplify here!
 
     print("Christoffel Symbols (2nd Kind) Computed.")
 
-    # Riemann Tensor (Mixed: R^i_{jkl})
+    # --- 7. Optimized Riemann & Curvature ---
     RiemannContra = compute_riemann(Gamma2nd, Theta, n_joints)
-    print("\nRiemann Tensor (Mixed) Computed.")
+    
+    # Directly calculate R_0101 to avoid the full 4D tensor if only K is needed
+    # R_{0101} = g_{0m} * R^m_{101}
+    R0101 = 0
+    for m in range(n_joints):
+        R0101 += M_simplified[0, m] * RiemannContra[m, 1, 0, 1]
 
-    # --- 7. Covariant Riemann & Gaussian Curvature ---
-    # R_{lijk} = sum_m ( g_{lm} * R^m_{ijk} )
-    RiemannCovar = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints, n_joints)
-    for i in range(n_joints):
-        for j in range(n_joints):
-            for k in range(n_joints):
-                for l in range(n_joints):
-                    sum_term = 0
-                    for m_idx in range(n_joints):
-                        sum_term += M_simplified[l, m_idx] * RiemannContra[m_idx, i, j, k]
-                    RiemannCovar[l, i, j, k] = sp.simplify(sum_term)
-
-    print("Fully Covariant Riemann Tensor Computed.")
-
-    # Gaussian Curvature: K = R_{0101} / det(g)
-    det_g = M_simplified.det()
-    K_sym = RiemannCovar[0, 1, 0, 1] / det_g
-    K_sym = sp.simplify(K_sym)
+    # Final simplification happens only ONCE here
+    K_sym = sp.simplify(R0101 / M_simplified.det())
 
     print("\nGaussian Curvature (K) Symbolic Expression:")
     sp.pprint(K_sym)
