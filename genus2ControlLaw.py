@@ -5,6 +5,12 @@ from scipy.integrate import solve_ivp
 from scipy.linalg import solve_continuous_are
 from scipy.integrate import solve_ivp
 
+# --- 1. Global Parameters for the HJB Controller ---
+# Q: Penalty for state error [theta1, theta2, p1, p2]
+Q = np.diag([10.0, 10.0, 1.0, 1.0]) 
+# R_effort: Penalty for motor torque u
+R_effort = np.diag([0.1, 0.1])
+
 def dh_htm(theta1, theta2, r, d):
     """Computes the standard DH Homogeneous Transformation Matrix."""
     return sp.Matrix([
@@ -34,60 +40,73 @@ def compute_riemann(Gamma2nd, Theta, n):
                     Riemann[i, j, k, l] = term1 - term2 + sum_term
     return Riemann
 
-# --- 21. Quadratic Regulator Parameters ---
-# Q: Penalty for being away from target (Theta1=pi, Theta2=0)
-Q = np.diag([10.0, 10.0, 1.0, 1.0]) 
-# R_effort: Penalty for motor torque
-R_effort = np.diag([0.1, 0.1])
-
-def get_hjb_optimal_control(state, target_q):
+def get_hjb_optimal_control(state, target_q, M_func):
     """
-    Computes u* by solving a local Linear Quadratic Regulator (LQR)
-    at the current point on the Riemannian manifold.
+    Computes u* by solving a local Linear Quadratic Regulator (LQR).
     """
     q = state[:2]
     p = state[2:]
     
     # Current Metric and its Inverse
-    g = M_func_numeric(q[1])
+    g = M_func(q[1])
     g_inv = np.linalg.inv(g)
     
     # Linearize dynamics locally: x_dot = Ax + Bu
-    # Here A involves the Christoffel symbols (Coriolis/Centrifugal)
-    # and B is the mapping from torque to momentum change
     A = np.zeros((4, 4))
     A[:2, 2:] = g_inv # dq/dt = g_inv * p
     
-    # For a simple regulator, B maps torque directly to momentum change
     B = np.zeros((4, 2))
-    B[2:, :] = np.eye(2) 
+    B[2:, :] = np.eye(2) # Torque maps to momentum change
     
-    # Solve Continuous Algebraic Riccati Equation (CARE) for the Value Function V
-    # P represents the Hessian of the Value Function V at this point
     try:
+        # Solve the Algebraic Riccati Equation for the current state
         P = solve_continuous_are(A, B, Q, R_effort)
-        # Optimal Control Law: u = -K * error
         K = np.linalg.inv(R_effort) @ B.T @ P
+        
+        # Compute error (Target momentum is 0)
         error = np.concatenate([q - target_q, p])
         u_star = -K @ error
-    except np.linalg.LinAlgError:
+    except Exception:
         u_star = np.array([0.0, 0.0])
         
     return u_star
 
-def optimal_dynamics(t, state, target_q):
+def optimal_dynamics(t, state, target_q, Q, R_effort, M_func, get_inv_metric):
+    """
+    Fixed dynamics that accepts all required positional arguments 
+    via the 'args' tuple in solve_ivp.
+    """
     theta1, theta2, p1, p2 = state
-    u = get_hjb_optimal_control(state, target_q)
+    q = state[:2]
+    p = state[2:]
     
-    # Hamiltonian dynamics + Control Input
-    # state_dot = [dq, dp]
-    dq_dp = control_law_dynamics(t, state) # Existing geodesic dynamics
+    # 1. Local Linearization for LQR (HJB Approximation)
+    g_inv = get_inv_metric(theta2)
     
-    # Add the control effort to the momentum change
-    dq_dp[2] += u[0]
-    dq_dp[3] += u[1]
+    A = np.zeros((4, 4))
+    A[:2, 2:] = g_inv 
+    B = np.zeros((4, 2))
+    B[2:, :] = np.eye(2)
     
-    return dq_dp
+    # Solve Riccati Equation for Optimal Control Effort u
+    try:
+        P = solve_continuous_are(A, B, Q, R_effort)
+        K = np.linalg.inv(R_effort) @ B.T @ P
+        error = np.concatenate([q - target_q, p]) # Target p is 0
+        u = -K @ error
+    except:
+        u = np.array([0.0, 0.0])
+
+    # 2. Hamiltonian Geodesic Dynamics
+    q_dot = g_inv @ p
+    
+    eps = 1e-6
+    h_plus = 0.5 * p @ get_inv_metric(theta2 + eps) @ p
+    h_minus = 0.5 * p @ get_inv_metric(theta2 - eps) @ p
+    dp2 = -(h_plus - h_minus) / (2 * eps)
+    
+    # Return [dq1, dq2, dp1 + u1, dp2 + u2]
+    return [q_dot[0], q_dot[1], u[0], dp2 + u[1]]
 
 if __name__ == "__main__":
 
@@ -285,11 +304,13 @@ if __name__ == "__main__":
 
     # Convert the symbolic Mass Matrix into a fast numerical function
     # We use the version with numerical rob_values substituted
+   # --- 17. Prepare the Numerical Functions ---
     M_func_numeric = sp.lambdify(Theta[1], M_numeric_sym, "numpy")
 
     def get_inverse_metric_numeric(theta2):
         """Retrieves the numerical g^-1 at a specific theta2."""
-        g_num = M_func_numeric(theta2)
+        # Ensure theta2 is a float for linalg
+        g_num = M_func_numeric(float(theta2))
         return np.linalg.inv(g_num)
 
     def control_law_dynamics(t, state):
@@ -345,8 +366,13 @@ if __name__ == "__main__":
     target_configuration = np.array([np.pi, 0.0]) # Goal: Link 1 flipped, Link 2 straight
     y0_optimal = [0, 0.1, 0, 0] # Start near origin with zero momentum
 
-    sol_hjb = solve_ivp(optimal_dynamics, (0, 20), y0_optimal, 
-                        args=(target_configuration,), t_eval=np.linspace(0, 20, 1000))
+    sol_hjb = solve_ivp(
+        optimal_dynamics, 
+        (0, 20), 
+        y0_optimal, 
+        args=(target_configuration, Q, R_effort, M_func_numeric, get_inverse_metric_numeric),
+        t_eval=np.linspace(0, 20, 1000)
+    )
     
     print("Optimal Control Law B[u(q, \dot{q})] computed.")
 
