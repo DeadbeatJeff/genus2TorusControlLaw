@@ -122,6 +122,8 @@ if __name__ == "__main__":
                 Gamma1st[i, j, k] = 0.5 * (sp.diff(M_simplified[i, j], Theta[k]) + 
                                           sp.diff(M_simplified[i, k], Theta[j]) - 
                                           sp.diff(M_simplified[j, k], Theta[i]))
+    
+    print("\nChristoffel Symbols (1st Kind) Computed.")
 
     Gamma2nd = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
     for i in range(n_joints):
@@ -131,6 +133,8 @@ if __name__ == "__main__":
                 for l in range(n_joints):
                     gamma_val += M_inv[i, l] * Gamma1st[l, j, k]
                 Gamma2nd[i, j, k] = sp.simplify(gamma_val)
+
+    print("Christoffel Symbols (2nd Kind) Computed.")
 
     # Riemann Tensor (Mixed: R^i_{jkl})
     RiemannContra = compute_riemann(Gamma2nd, Theta, n_joints)
