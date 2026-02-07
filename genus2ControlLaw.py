@@ -119,6 +119,8 @@ if __name__ == "__main__":
     # Pre-compute derivatives: dM[k] = partial M / partial Theta[k]
     # This avoids calling sp.diff inside the nested loops
     dM = [M_simplified.diff(Theta[k]) for k in range(n_joints)]
+    
+    print("Pre-computed derivatives of Mass Matrix M.")
 
     # 1. Christoffel Symbols of the First Kind [ijk]
     # Formula: Gamma_ijk = 0.5 * (dg_ik/dxj + dg_ij/dxk - dg_jk/dxi)
@@ -158,8 +160,6 @@ if __name__ == "__main__":
 
     print("\nGaussian Curvature (K) Symbolic Expression:")
     sp.pprint(K_sym)
-
-    # ... [Keep Sections 1 through 7 as they are] ...
 
     # --- 8. Geodesic Control Law (Natural Geometry Path) ---
     def geodesic_dynamics(t, state, get_inv_metric):
