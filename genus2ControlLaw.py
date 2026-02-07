@@ -109,83 +109,91 @@ def optimal_dynamics(t, state, target_q, Q, R_effort, M_func, get_inv_metric):
     return [q_dot[0], q_dot[1], u[0], dp2 + u[1]]
 
 if __name__ == "__main__":
+    # --- 1. Define Variables ---
+    # Active Motors (q) and Passive Joints (p)
+    q = sp.Matrix([sp.symbols('theta1'), sp.symbols('theta4')])
+    p = sp.Matrix([sp.symbols('theta2'), sp.symbols('theta3')])
+    q_dot = sp.Matrix([sp.symbols('thetaDot1'), sp.symbols('thetaDot4')])
 
-    # 1. Initialize Symbolic Variables
-    g = sp.symbols('g')
-    n_joints = 2 # Based on dhParams in curvature.m
+    L = sp.symbols('L1:6')
+    m = sp.symbols('m1:5')
+    Izz = sp.symbols('Izz1:5')
+    g_sym = sp.symbols('g')
+    n_joints = 2 # Crucial: The system has 2 Degrees of Freedom (DoF)
 
-    # Joint variables: theta, d_theta, dd_theta
-    Theta = sp.symbols(f'Theta1:{n_joints+1}')
-    thetaDot = sp.symbols(f'thetaDot1:{n_joints+1}')
-    doubleThetaDot = sp.symbols(f'doubleThetaDot1:{n_joints+1}')
+    # --- 2. Loop Closure & Jacobian ---
+    # f = [xC_left - xC_right, yC_left - yC_right] = 0
+    f1 = L[0]*sp.cos(q[0]) + L[1]*sp.cos(p[0]) - (L[4] + L[3]*sp.cos(q[1]) + L[2]*sp.cos(p[1]))
+    f2 = L[0]*sp.sin(q[0]) + L[1]*sp.sin(p[0]) - (L[3]*sp.sin(q[1]) + L[2]*sp.sin(p[1]))
+    Phi = sp.Matrix([f1, f2])
 
-    # Physical parameters: mass, inertia
-    m = sp.symbols(f'm1:{n_joints+1}')
-    Izz = sp.symbols(f'Izz1:{n_joints+1}')
-    L = sp.symbols(f'L1:{n_joints+1}')
+    # Implicit Differentiation: J_p * p_dot + J_q * q_dot = 0
+    J_p = Phi.jacobian(p)
+    J_q = Phi.jacobian(q)
+    J_vel = -J_p.inv() @ J_q
+    p_dot = J_vel @ q_dot # Maps motor speeds to passive link speeds
 
-    # 2. Define DH Parameters [theta, alpha, r, d]
-    # Based on curvature.m: [0 0 1 0; 0 0 0 1]
-    dh_params = [
-        [Theta[0], 0, 1, 0],
-        [Theta[1], 0, 0, 1]
-    ]
-
-    # 3. Compute Transformations
-    T = []
-    for params in dh_params:
-        T.append(dh_htm(*params))
-
-        # 2. Kinematics (Center of Mass positions)
-    x = [0] * n_joints
-    y = [0] * n_joints
-
-    # Link 1 CoM
-    x[0] = (1/2) * L[0] * sp.cos(Theta[0])
-    y[0] = (1/2) * L[0] * sp.sin(Theta[0])
-
-    # Link 2 CoM (Simplified planar geometry logic from your MATLAB loop)
-    # Position of joint 2 + half of link 2
-    x[1] = L[0] * sp.cos(Theta[0]) + (1/2) * L[1] * sp.cos(Theta[0] + Theta[1])
-    y[1] = L[0] * sp.sin(Theta[0]) + (1/2) * L[1] * sp.sin(Theta[0] + Theta[1])
-
-    # 4. Velocities
-    xdot = [sp.diff(pos, t) for pos, t in zip(x, Theta)] # Partial diffs handled via Chain Rule below
+    # --- 3. Link Velocities (CoM midpoints) ---
     v_sq = []
-    for i in range(n_joints):
-        # Total derivative: dx/dt = sum( (dx/dTheta_j) * thetaDot_j )
-        xd = sum(sp.diff(x[i], Theta[j]) * thetaDot[j] for j in range(n_joints))
-        yd = sum(sp.diff(y[i], Theta[j]) * thetaDot[j] for j in range(n_joints))
-        v_sq.append(xd**2 + yd**2)
+    # Link 1 & 4 (Cranks)
+    v_sq.append((L[0]/2 * q_dot[0])**2) # v1
+    # Link 2 (Coupler 1): joint B velocity + link 2 relative velocity
+    vB = sp.Matrix([-L[0]*sp.sin(q[0])*q_dot[0], L[0]*sp.cos(q[0])*q_dot[0]])
+    v2 = vB + sp.Matrix([-L[1]/2*sp.sin(p[0])*p_dot[0], L[1]/2*sp.cos(p[0])*p_dot[0]])
+    v_sq.append(v2.dot(v2)) # v2
+    # Link 3 (Coupler 2): joint D velocity + link 3 relative velocity
+    vD = sp.Matrix([-L[3]*sp.sin(q[1])*q_dot[1], L[3]*sp.cos(q[1])*q_dot[1]])
+    v3 = vD + sp.Matrix([-L[2]/2*sp.sin(p[1])*p_dot[1], L[2]/2*sp.cos(p[1])*p_dot[1]])
+    v_sq.append(v3.dot(v3)) # v3
+    v_sq.append((L[3]/2 * q_dot[1])**2) # v4
 
-    # 5. Energy Calculations
+    # --- 4. Total Kinetic Energy & Metric ---
     KE = 0
-    V = 0
-    thetaDotSum = 0
+    all_omg_dots = [q_dot[0], p_dot[0], p_dot[1], q_dot[1]]
+    for i in range(4):
+        KE += 0.5 * m[i] * v_sq[i] + 0.5 * Izz[i] * all_omg_dots[i]**2
 
-    for i in range(n_joints):
-        thetaDotSum += thetaDot[i]
-        # Translational + Rotational Kinetic Energy
-        KE += (1/2) * m[i] * v_sq[i] + (1/2) * Izz[i] * (thetaDotSum)**2
-        # Potential Energy (Gravity)
-        V += m[i] * g * y[i]
+    # Extract the 2x2 Mass Matrix M
+    M = sp.Matrix([
+        [sp.diff(KE, q_dot[0], q_dot[0]), sp.diff(KE, q_dot[0], q_dot[1])],
+        [sp.diff(KE, q_dot[1], q_dot[0]), sp.diff(KE, q_dot[1], q_dot[1])]
+    ])
+    M_simplified = sp.simplify(M)
 
-    Lagrangian = KE - V
+    # 5. Lagrangian and Mass Matrix
+    KE = 0
+    all_sq_vels = [v1_sq, v2_sq, v3_sq, v4_sq]
+    all_omg_dots = [q_dot[0], p_dot[0], p_dot[1], q_dot[1]]
 
-    # 6. Equations of Motion (Euler-Lagrange)
-    # d/dt(dL/dthetaDot) - dL/dtheta = Tau
-    RHS = []
-    for i in range(n_joints):
-        dL_dthetaDot = sp.diff(Lagrangian, thetaDot[i])
-        
-        # Time derivative of dL/dthetaDot
-        term1 = 0
-        for j in range(n_joints):
-            term1 += sp.diff(dL_dthetaDot, Theta[j]) * thetaDot[j]
-            term1 += sp.diff(dL_dthetaDot, thetaDot[j]) * doubleThetaDot[j]
-            
-        term2 = sp.diff(Lagrangian, Theta[i])
-        RHS.append(sp.simplify(term1 - term2))
+    for i in range(4):
+        KE += 0.5 * m[i] * all_sq_vels[i] + 0.5 * Izz[i] * all_omg_dots[i]**2
+
+    # Extract 2x2 Riemannian Metric (Mass Matrix)
+    M = sp.Matrix([
+        [sp.diff(KE, q_dot[0], q_dot[0]), sp.diff(KE, q_dot[0], q_dot[1])],
+        [sp.diff(KE, q_dot[1], q_dot[0]), sp.diff(KE, q_dot[1], q_dot[1])]
+    ])
+
+    M_simplified = sp.simplify(M)
+
+    # 6. Energy Calculations
+    KE = 0
+    V_potential = 0
+    for i in range(4):
+        # KE = 1/2 m v^2 + 1/2 I omega^2
+        KE += 0.5 * m[i] * v_sq[i] + 0.5 * Izz[i] * all_theta_dot[i]**2
+        V_potential += m[i] * g * y_com[i]
+
+    Lagrangian = sp.simplify(KE - V_potential)
+
+    # 7. Extract 2x2 Mass Matrix M(q)
+    # M_ij = d^2(KE) / (d(q_dot_i) d(q_dot_j))
+    M = sp.Matrix([
+        [sp.diff(KE, q_dot[0], q_dot[0]), sp.diff(KE, q_dot[0], q_dot[1])],
+        [sp.diff(KE, q_dot[1], q_dot[0]), sp.diff(KE, q_dot[1], q_dot[1])]
+    ])
+
+    M = sp.simplify(M)
 
     # 7. Create a dictionary of numerical values
     # This replaces the MATLAB loop for assigning constants
@@ -193,15 +201,25 @@ if __name__ == "__main__":
 
     for i in range(n_joints):
         # Map the symbolic variable to the numeric value
-        rob_values[m[i]] = 0.181
-        rob_values[L[i]] = 0.250
+        # rob_values[m[i]] = 0.181
+        # Updated for 5-bar Grashof "Double Crank" behavior
+        # Updated for 5-bar where l1 and l4 are cranks
+        rob_values = {
+            L[0]: 4.0,   # l1 (Crank 1)
+            L[1]: 30.0,  # l2 (Coupler 1)
+            L[2]: 30.0,  # l3 (Coupler 2)
+            L[3]: 4.0,   # l4 (Crank 2)
+            L[4]: 10.0,  # l5 (Base)
+            m[0]: 0.1, m[1]: 0.5, m[2]: 0.5, m[3]: 0.1, # Masses
+            g: 9.81
+}
         rob_values[Izz[i]] = 0.001
         # If you included the full inertia tensor in your EoM:
         # rob_values[Ixx[i]] = 0.093805
         # rob_values[Iyy[i]] = 0.001
 
     # 8. Add gravity if needed
-    rob_values[g] = 9.81
+    # rob_values[g] = 9.81
 
     # 9. Extract Mass Matrix (MJeff)
     # The Mass Matrix M is the coefficient of doubleThetaDot
