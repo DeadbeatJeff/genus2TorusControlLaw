@@ -105,8 +105,8 @@ if __name__ == "__main__":
         Izz[0]: 0.001, Izz[1]: 0.001, Izz[2]: 0.001, Izz[3]: 0.001,
         g_sym: 9.81
     }
-    print("Mass Matrix M (Symbolic):")
-    sp.pprint(M)
+
+    print("\nMass Matrix M (Symbolic) computed.")
     
     # Substitute values and simplify
     # Note: theta2 in the HJB section refers to the second control variable (theta4)
@@ -116,7 +116,8 @@ if __name__ == "__main__":
 
     M_simplified = sp.simplify(M.subs(rob_values))
 
-    print("\nMass Matrix M (Simplified) computed.")
+    print("Mass Matrix M (Simplified):")
+    sp.pprint(M_simplified)
 
    # --- 6. Optimized Christoffel Symbols ---
     M_inv = M_simplified.inv()
