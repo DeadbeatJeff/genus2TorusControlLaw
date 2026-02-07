@@ -268,3 +268,36 @@ if __name__ == "__main__":
 
     plt.tight_layout()
     plt.show()
+
+    # --- 11. Topology Verification: Gauss-Bonnet Theorem ---
+    from scipy.integrate import dblquad
+
+    print("\n--- Topology Verification ---")
+    
+    # 1. Lambdify Gaussian Curvature for numerical integration
+    # Note: K_sym depends on theta4 (q[1]) and potentially theta1 (q[0])
+    K_num_func = sp.lambdify((q[0], q[1]), K_sym, "numpy")
+
+    # 2. Define the area element dA = sqrt(det(g)) d_theta1 d_theta4
+    # The mass matrix M_simplified is our metric tensor g
+    det_g_func = sp.lambdify((q[0], q[1]), M_simplified.det(), "numpy")
+
+    def integrand(t4, t1):
+        # Gaussian Curvature integral: Integral(K * dA) 
+        # dA = sqrt(det(g)) * dt1 * dt4
+        # However, for the standard Gauss-Bonnet in these coordinates:
+        # Integral(K * sqrt(det(g)) dt1 dt4)
+        return K_num_func(t1, t4) * np.sqrt(np.abs(det_g_func(t1, t4)))
+
+    # 3. Integrate over the 2-torus domain: [0, 2pi] x [0, 2pi]
+    total_curvature, error = dblquad(integrand, 0, 2*np.pi, 0, 2*np.pi)
+    
+    euler_characteristic = total_curvature / (2 * np.pi)
+
+    print(f"Total Integrated Curvature: {total_curvature:.4f}")
+    print(f"Calculated Euler Characteristic (chi): {euler_characteristic:.4f}")
+    
+    if round(euler_characteristic) == -2:
+        print("Success: The C-space is confirmed to be a Genus-2 surface (chi = -2).")
+    else:
+        print(f"Result: chi is approximately {round(euler_characteristic)}. Check metric for singularities.")
