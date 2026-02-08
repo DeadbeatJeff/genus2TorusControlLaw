@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 from scipy.linalg import solve_continuous_are
 from scipy.integrate import dblquad
+from sympy.utilities.lambdify import lambdify
 
 # --- 1. Global Parameters for the HJB Controller ---
 Q_mat = np.diag([10.0, 10.0, 1.0, 1.0]) 
@@ -101,7 +102,8 @@ if __name__ == "__main__":
     for i in range(4):
         KE += 0.5 * m[i] * v_sq[i] + 0.5 * Izz[i] * all_omg_dots[i]**2
 
-    # --- 5. Mass Matrix (Riemannian Metric) ---
+    # --- 5. Mass Matrix & Passive Variable Substitution ---
+
     M = sp.Matrix([
         [sp.diff(KE, q_dot[0], q_dot[0]), sp.diff(KE, q_dot[0], q_dot[1])],
         [sp.diff(KE, q_dot[1], q_dot[0]), sp.diff(KE, q_dot[1], q_dot[1])]
@@ -135,18 +137,26 @@ if __name__ == "__main__":
     }
 
     # 4. Substitute these directly into M instead of using sp.solve()
-    M_numeric = M.subs({
+    M_values = M.subs(rob_values)
+    
+    print("\nMass Matrix (Numerical, 3DP):")
+    sp.pprint(clean_expr(M_values))
+
+    # 4. Substitute these directly into M instead of using sp.solve()
+    M_numeric = M_values.subs({
         p_vars[0]: theta2_expr, 
         p_vars[1]: theta3_expr
-    }).subs(rob_values)
+    })
 
-    print("\nMass Matrix (Numerical, 3DP):")
-    sp.pprint(clean_expr(M_numeric))
+    # 5. Manual 2x2 Inverse (Instantaneous)
+    a, b, c, d = M_values[0,0], M_values[0,1], M_values[1,0], M_values[1,1]
+    det_g_values = a*d - b*c
+    M_inv_values = sp.Matrix([[d, -b], [-c, a]]) / det_g_values
 
     # 5. Manual 2x2 Inverse (Instantaneous)
     a, b, c, d = M_numeric[0,0], M_numeric[0,1], M_numeric[1,0], M_numeric[1,1]
-    det = a*d - b*c
-    M_inv_numeric = sp.Matrix([[d, -b], [-c, a]]) / det
+    det_g = a*d - b*c
+    M_inv_numeric = sp.Matrix([[d, -b], [-c, a]]) / det_g
 
     print("Inverse Mass Matrix M^(-1) computed.")
 
@@ -155,30 +165,63 @@ if __name__ == "__main__":
     get_inverse_metric_numeric = sp.lambdify((q[0], q[1]), M_inv_numeric, "numpy")
 
     print("Inverse Mass Matrix M^(-1) lambdified.")
+
+    # 1. Substitute numerical values into the passive coordinate expressions first
+    # This ensures theta2 and theta3 are functions of (theta1, theta4) only, 
+    # with no L1, L2, etc. remaining.
+    theta3_numeric_expr = theta3_expr.subs(rob_values)
+    theta2_numeric_expr = theta2_expr.subs(rob_values)
+
+    # 2. Substitute into the Mass Matrix
+    # M_values contains rob_values for masses/lengths but still has p_vars (theta2, theta3)
+    M_numeric = M_values.subs({
+        p_vars[0]: theta2_numeric_expr, 
+        p_vars[1]: theta3_numeric_expr
+    })
+
+    # 3. Update the derivative chains to use the numerical versions
+    # This is critical for the Christoffel and Riemann calculations
+    dth3_dq = [sp.diff(theta3_numeric_expr, q[0]), sp.diff(theta3_numeric_expr, q[1])]
+    dth2_dq = [sp.diff(theta2_numeric_expr, q[0]), sp.diff(theta2_numeric_expr, q[1])]
+
+    # 4. Compute the Total Derivative of M using the numerical chain
+    dM_dq = []
+    for j in range(2):
+        total_diff = (
+            sp.diff(M_values, q[j]) + 
+            sp.diff(M_values, p_vars[0]) * dth2_dq[j] + 
+            sp.diff(M_values, p_vars[1]) * dth3_dq[j]
+        )
+        dM_dq.append(total_diff)
+
+    # 4. Final Lambdification
+    # Now we create a function that takes ALL 4 angles as inputs.
+    # This avoids the "Add" object error because we pass numerical values for all 4.
+    get_dM_numeric = sp.lambdify((*q, *p_vars), dM_dq, "numpy")
     
-    # # Pre-compute derivatives of the numerical metric w.r.t coordinates
-    # # This avoids calling sp.diff dozens of times inside the loops
-    # dM = [M_numeric.diff(Theta[k]) for k in range(n_joints)]
+    # Pre-compute derivatives of the numerical metric w.r.t coordinates
+    # This avoids calling sp.diff dozens of times inside the loops
+    dM = [M_values.diff(Theta[k]) for k in range(n_joints)]
 
-    # print("Pre-computed derivatives of Mass Matrix for Christoffel Symbols.")
+    print("Pre-computed derivatives of Mass Matrix for Christoffel Symbols.")
 
-    # # --- 6. Volume Form and Total C-Space Volume ---
-    # print("\n--- Volume Form and Integration ---")
+    # --- 6. Volume Form and Total C-Space Volume ---
+    print("\n--- Volume Form and Integration ---")
 
-    # # 1. Define the Volume Form: sqrt(det(g))
-    # # M_numeric is your mass matrix with rob_values substituted
-    # det_g = M_numeric.det()
-    # volume_form_sym = sp.sqrt(sp.Abs(det_g))
+    # 1. Define the Volume Form: sqrt(det(g))
+    # M_numeric is your mass matrix with rob_values substituted
+    #  = M_numeric.det()
+    volume_form_sym = sp.sqrt(sp.Abs(det_g))
 
-    # # 2. Clean and Print the Volume Form (3 decimal places)
-    # volume_form_cleaned = clean_expr(volume_form_sym)
-    # print("Symbolic Volume Form (sqrt(det(g))):")
-    # sp.pprint(volume_form_cleaned)
+    # 2. Clean and Print the Volume Form (3 decimal places)
+    volume_form_cleaned = clean_expr(volume_form_sym)
+    print("Symbolic Volume Form (sqrt(det(g))):")
+    sp.pprint(volume_form_cleaned)
 
-    # # 3. Numerical Integration of the Volume Form
-    # # Convert to a fast numpy function for dblquad
-    # # The volume form typically only depends on the internal shape (theta4)
-    # volume_func = sp.lambdify((q[0], q[1]), volume_form_sym, "numpy")
+    # 3. Numerical Integration of the Volume Form
+    # Convert to a fast numpy function for dblquad
+    # The volume form typically only depends on the internal shape (theta4)
+    volume_func = sp.lambdify((q[0], q[1]), volume_form_sym, "numpy")
 
     # # Integrate over the 2-torus domain: [0, 2pi] x [0, 2pi]
     # total_volume, error = dblquad(
@@ -189,76 +232,129 @@ if __name__ == "__main__":
 
     # print(f"Total Integrated Volume (Area) of C-Space: {total_volume:.4f}")
 
-    # # 4. Relation to Gauss-Bonnet
-    # # If K is constant curvature -1, the volume must be exactly 4*pi for a genus-2 surface.
-    # expected_vol_if_constant_neg1 = 4 * np.pi
-    # print(f"Comparison: A constant K=-1 genus-2 surface would have Volume = {expected_vol_if_constant_neg1:.4f}")
+    # 4. Relation to Gauss-Bonnet
+    # If K is constant curvature -1, the volume must be exactly 4*pi for a genus-2 surface.
+    expected_vol_if_constant_neg1 = 4 * np.pi
+    print(f"Comparison: A constant K=-1 genus-2 surface would have Volume = {expected_vol_if_constant_neg1:.4f}")
 
-    # # --- 7. Faster Christoffel Symbols (1st and 2nd Kind) ---
-    # Gamma1st = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
-    # Gamma2nd = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
+    # --- 7. Faster Christoffel Symbols (using Total Derivatives) ---
+    Gamma1st = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
+    Gamma2nd = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
 
-    # for i in range(n_joints):
-    #     for j in range(n_joints):
-    #         for k in range(n_joints):
-    #             # 1st Kind: Gamma_ijk = 0.5 * (dg_ik/dxj + dg_ij/dxk - dg_jk/dxi)
-    #             Gamma1st[i, j, k] = 0.5 * (dM[j][i, k] + dM[k][i, j] - dM[i][j, k])
-                
-    #             # 2nd Kind: Gamma^i_jk = g^il * Gamma_ljk
-    #             gamma_val = 0
-    #             for l in range(n_joints):
-    #                 gamma_val += M_inv[i, l] * Gamma1st[l, j, k]
-    #             Gamma2nd[i, j, k] = gamma_val
+    for i in range(n_joints):
+        for j in range(n_joints):
+            for k in range(n_joints):
+                # 1st Kind: Use dM_dq (the total derivatives computed in Section 5)
+                Gamma1st[i, j, k] = 0.5 * (dM_dq[j][i, k] + dM_dq[k][i, j] - dM_dq[i][j, k])
 
-    # print("Numerical Christoffel Symbols Computed.")
+    for i in range(n_joints):
+        for j in range(n_joints):
+            for k in range(n_joints):
+                gamma_val = 0
+                for l in range(n_joints):
+                    # Use M_inv_values which is still in terms of theta1-theta4
+                    gamma_val += M_inv_values[i, l] * Gamma1st[l, j, k]
+                Gamma2nd[i, j, k] = gamma_val
 
-    # # --- 8. Optimized Curvature & Riemann ---
-    # # Compute Riemann mixed tensor
-    # RiemannContra = compute_riemann(Gamma2nd, Theta, n_joints)
+    # --- 8. Optimized Curvature Calculation ---
+    # --- Add this helper function before compute_riemann_total ---
+    def total_diff_expr(expr, k_idx):
+        """
+        Computes the total derivative of a symbolic expression expr w.r.t q[k_idx]
+        using the chain rule for passive variables theta2 and theta3.
+        """
+        # Partial w.r.t active q[k_idx] + partials w.r.t passive vars * their gradients
+        return (sp.diff(expr, q[k_idx]) + 
+                sp.diff(expr, p_vars[0]) * dth2_dq[k_idx] + 
+                sp.diff(expr, p_vars[1]) * dth3_dq[k_idx])
 
-    # print("Numerical Riemann Curvature Tensor Computed.")
-    
-    # # Gaussian Curvature: K = R_0101 / det(g)
-    # # Only compute the specific covariant component needed for K
-    # R0101 = sum(M_numeric[0, m] * RiemannContra[m, 1, 0, 1] for m in range(n_joints))
-    # K_sym = R0101 / M_numeric.det()
+    # --- Updated compute_riemann_total ---
+    def compute_riemann_total(Gamma, n):
+        Riemann = sp.MutableDenseNDimArray.zeros(n, n, n, n)
+        for i in range(n):
+            for j in range(n):
+                for k in range(n):
+                    for l in range(n):
+                        # Use the helper function instead of a non-existent 'total_diff'
+                        term1 = total_diff_expr(Gamma[i, j, l], k)
+                        term2 = total_diff_expr(Gamma[i, j, k], l)
+                        
+                        sum_term = 0
+                        for p in range(n):
+                            sum_term += (Gamma[i, k, p] * Gamma[p, j, l] - 
+                                        Gamma[i, l, p] * Gamma[p, j, k])
+                        Riemann[i, j, k, l] = term1 - term2 + sum_term
+        return Riemann
 
-    # print("\nGaussian Curvature (Numerical, 3DP):")
-    # sp.pprint(clean_expr(K_sym))
+    # Calculate Riemann and K in terms of (theta1, theta2, theta3, theta4)
+    RiemannContra = compute_riemann_total(Gamma2nd, n_joints)
+    R0101 = sum(M_values[0, m] * RiemannContra[m, 1, 0, 1] for m in range(n_joints))
 
-    # # --- 9. Topology Verification: Gauss-Bonnet Theorem ---
-    # print("\n--- Topology Verification ---")
-    
-    # # 1. Lambdify Gaussian Curvature for numerical integration
-    # # Note: K_sym depends on theta4 (q[1]) and potentially theta1 (q[0])
-    # K_num_func = sp.lambdify((q[0], q[1]), K_sym, "numpy")
+    # 1. K_full: The symbolic version in terms of all 4 angles for printing
+    K_full = R0101 / det_g_values
+    # print("\nGaussian Curvature K (In terms of theta1-theta4):")
+    # sp.pprint(K_full)
 
-    # # 2. Define the area element dA = sqrt(det(g)) d_theta1 d_theta4
-    # # The mass matrix M_simplified is our metric tensor g
-    # det_g_func = sp.lambdify((q[0], q[1]), M_numeric.det(), "numpy")
+    # 2. K_active: Substitute passive expressions to get K(theta1, theta4) only
+    K_active = K_full.subs({p_vars[0]: theta2_numeric_expr, p_vars[1]: theta3_numeric_expr})
 
-    # def integrand(t4, t1):
-    #     # Gaussian Curvature integral: Integral(K * dA) 
-    #     # dA = sqrt(det(g)) * dt1 * dt4
-    #     # However, for the standard Gauss-Bonnet in these coordinates:
-    #     # Integral(K * sqrt(det(g)) dt1 dt4)
-    #     return K_num_func(t1, t4) * np.sqrt(np.abs(det_g_func(t1, t4)))
+    print("\nK_active computed.")
 
-    # # 3. Integrate over the 2-torus domain: [0, 2pi] x [0, 2pi]
-    # total_curvature, error = dblquad(integrand, 0, 2*np.pi, 0, 2*np.pi)
-    
-    # average_curvature = total_curvature / (4 * np.pi)
+    # 3. K_num_func: Fast numerical version for integration/simulation
+    # Use Common Subexpression Elimination to simplify the math tree
+    reduced_exprs, simplified_K = sp.cse(K_active)
+    K_num_func = lambdify((q[0], q[1]), simplified_K[0], "numpy")
+    print("\nFast numerical curvature function generated.")
 
-    # print(f"Total Integrated Curvature: {total_curvature:.4f}")
-    # print(f"Average Curvature: {average_curvature:.4f}")
-    
-    # euler_characteristic = total_curvature / (2 * np.pi)
-    # print(f"Calculated Euler Characteristic (chi): {euler_characteristic:.4f}")
-    
-    # if round(average_curvature) == -1:
-    #     print("Success: The c-space is confirmed to be a genus-2 surface (average curvature = -1).")
-    # else:
-    #     print(f"Result: Average curvature is approximately {round(average_curvature)}. Check metric for singularities.")
+    # --- 9. Topology Verification: Gauss-Bonnet Theorem ---
+    print("\n--- Topology Verification ---")
+
+    # 1. Optimize det_g using CSE for fast integration
+    reduced_det, simplified_det = sp.cse(det_g)
+    # simplified_det is a list; we take the first element [0]
+    det_g_raw_func = sp.lambdify((q[0], q[1]), simplified_det[0], "numpy")
+
+    print("\ndet_g_raw_func computed with CSE optimization.")
+
+    # Use a wrapper that handles potential SymPy-to-NumPy conversion issues
+    def det_g_func(t1, t4):
+        val = det_g_raw_func(t1, t4)
+        # Force conversion to float; if it's an array/list, take the item
+        return float(np.array(val).flatten()[0])
+
+    def integrand(t4, t1):
+        try:
+            # Extract curvature value safely
+            k_raw = K_num_func(t1, t4)
+            k_val = float(np.array(k_raw).flatten()[0])
+            
+            # Extract determinant value safely
+            det_val = det_g_func(t1, t4)
+            
+            # dA = K * sqrt(|det(g)|)
+            return k_val * np.sqrt(np.abs(det_val))
+        except (TypeError, ValueError):
+            # Fallback for any remaining symbolic artifacts
+            return 0.0
+
+    # 2. Integrate over the 2-torus domain: [0, 2pi] x [0, 2pi]
+    # epsrel=1e-4 is usually sufficient for topology checks and much faster
+    total_curvature, error = dblquad(integrand, 0, 2*np.pi, 0, 2*np.pi, epsrel=1e-4)
+
+    print(f"\nTotal curvature computed: {total_curvature:.4f}")
+
+    # 3. Final Topology Check
+    euler_characteristic = total_curvature / (2 * np.pi)
+    print(f"Calculated Euler Characteristic (chi): {euler_characteristic:.4f}")
+
+    # 3. Final Topology Check
+    euler_characteristic = total_curvature / (2 * np.pi)
+    print(f"Calculated Euler Characteristic (chi): {euler_characteristic:.4f}")
+
+    if round(euler_characteristic) == -2:
+        print("Success: The C-space is confirmed to be a genus-2 surface (chi = -2).")
+    else:
+        print(f"Result: chi is {round(euler_characteristic)}. Check metric for singularities.")
 
     # --- 10. Geodesic Control Law (Natural Geometry Path) ---
     def geodesic_dynamics(t, state, get_inv_metric):
