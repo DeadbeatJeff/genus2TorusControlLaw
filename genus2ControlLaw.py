@@ -132,39 +132,37 @@ if __name__ == "__main__":
 
     print("Pre-computed derivatives of Mass Matrix for Christoffel Symbols.")
 
-    # --- 6. Volume Form and Total C-Space Volume ---
-    from scipy.integrate import dblquad
+    # # --- 6. Volume Form and Total C-Space Volume ---
+    # print("\n--- Volume Form and Integration ---")
 
-    print("\n--- Volume Form and Integration ---")
+    # # 1. Define the Volume Form: sqrt(det(g))
+    # # M_numeric is your mass matrix with rob_values substituted
+    # det_g = M_numeric.det()
+    # volume_form_sym = sp.sqrt(sp.Abs(det_g))
 
-    # 1. Define the Volume Form: sqrt(det(g))
-    # M_numeric is your mass matrix with rob_values substituted
-    det_g = M_numeric.det()
-    volume_form_sym = sp.sqrt(sp.Abs(det_g))
+    # # 2. Clean and Print the Volume Form (3 decimal places)
+    # volume_form_cleaned = clean_expr(volume_form_sym)
+    # print("Symbolic Volume Form (sqrt(det(g))):")
+    # sp.pprint(volume_form_cleaned)
 
-    # 2. Clean and Print the Volume Form (3 decimal places)
-    volume_form_cleaned = clean_expr(volume_form_sym)
-    print("Symbolic Volume Form (sqrt(det(g))):")
-    sp.pprint(volume_form_cleaned)
+    # # 3. Numerical Integration of the Volume Form
+    # # Convert to a fast numpy function for dblquad
+    # # The volume form typically only depends on the internal shape (theta4)
+    # volume_func = sp.lambdify((q[0], q[1]), volume_form_sym, "numpy")
 
-    # 3. Numerical Integration of the Volume Form
-    # Convert to a fast numpy function for dblquad
-    # The volume form typically only depends on the internal shape (theta4)
-    volume_func = sp.lambdify((q[0], q[1]), volume_form_sym, "numpy")
+    # # Integrate over the 2-torus domain: [0, 2pi] x [0, 2pi]
+    # total_volume, error = dblquad(
+    #     lambda t4, t1: volume_func(t1, t4), 
+    #     0, 2*np.pi, 
+    #     0, 2*np.pi
+    # )
 
-    # Integrate over the 2-torus domain: [0, 2pi] x [0, 2pi]
-    total_volume, error = dblquad(
-        lambda t4, t1: volume_func(t1, t4), 
-        0, 2*np.pi, 
-        0, 2*np.pi
-    )
+    # print(f"Total Integrated Volume (Area) of C-Space: {total_volume:.4f}")
 
-    print(f"Total Integrated Volume (Area) of C-Space: {total_volume:.4f}")
-
-    # 4. Relation to Gauss-Bonnet
-    # If K is constant curvature -1, the volume must be exactly 4*pi for a genus-2 surface.
-    expected_vol_if_constant_neg1 = 4 * np.pi
-    print(f"Comparison: A constant K=-1 genus-2 surface would have Volume = {expected_vol_if_constant_neg1:.4f}")
+    # # 4. Relation to Gauss-Bonnet
+    # # If K is constant curvature -1, the volume must be exactly 4*pi for a genus-2 surface.
+    # expected_vol_if_constant_neg1 = 4 * np.pi
+    # print(f"Comparison: A constant K=-1 genus-2 surface would have Volume = {expected_vol_if_constant_neg1:.4f}")
 
     # --- 7. Faster Christoffel Symbols (1st and 2nd Kind) ---
     Gamma1st = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
