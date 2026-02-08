@@ -132,7 +132,41 @@ if __name__ == "__main__":
 
     print("Pre-computed derivatives of Mass Matrix for Christoffel Symbols.")
 
-    # --- 6. Faster Christoffel Symbols (1st and 2nd Kind) ---
+    # --- 6. Volume Form and Total C-Space Volume ---
+    from scipy.integrate import dblquad
+
+    print("\n--- Volume Form and Integration ---")
+
+    # 1. Define the Volume Form: sqrt(det(g))
+    # M_numeric is your mass matrix with rob_values substituted
+    det_g = M_numeric.det()
+    volume_form_sym = sp.sqrt(sp.Abs(det_g))
+
+    # 2. Clean and Print the Volume Form (3 decimal places)
+    volume_form_cleaned = clean_expr(volume_form_sym)
+    print("Symbolic Volume Form (sqrt(det(g))):")
+    sp.pprint(volume_form_cleaned)
+
+    # 3. Numerical Integration of the Volume Form
+    # Convert to a fast numpy function for dblquad
+    # The volume form typically only depends on the internal shape (theta4)
+    volume_func = sp.lambdify((q[0], q[1]), volume_form_sym, "numpy")
+
+    # Integrate over the 2-torus domain: [0, 2pi] x [0, 2pi]
+    total_volume, error = dblquad(
+        lambda t4, t1: volume_func(t1, t4), 
+        0, 2*np.pi, 
+        0, 2*np.pi
+    )
+
+    print(f"Total Integrated Volume (Area) of C-Space: {total_volume:.4f}")
+
+    # 4. Relation to Gauss-Bonnet
+    # If K is constant curvature -1, the volume must be exactly 4*pi for a genus-2 surface.
+    expected_vol_if_constant_neg1 = 4 * np.pi
+    print(f"Comparison: A constant K=-1 genus-2 surface would have Volume = {expected_vol_if_constant_neg1:.4f}")
+
+    # --- 7. Faster Christoffel Symbols (1st and 2nd Kind) ---
     Gamma1st = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
     Gamma2nd = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
 
@@ -150,7 +184,7 @@ if __name__ == "__main__":
 
     print("Numerical Christoffel Symbols Computed.")
 
-    # --- 7. Optimized Curvature & Riemann ---
+    # --- 8. Optimized Curvature & Riemann ---
     # Compute Riemann mixed tensor
     RiemannContra = compute_riemann(Gamma2nd, Theta, n_joints)
 
@@ -164,7 +198,7 @@ if __name__ == "__main__":
     print("\nGaussian Curvature (Numerical, 3DP):")
     sp.pprint(clean_expr(K_sym))
 
-    # --- 8. Topology Verification: Gauss-Bonnet Theorem ---
+    # --- 9. Topology Verification: Gauss-Bonnet Theorem ---
     print("\n--- Topology Verification ---")
     
     # 1. Lambdify Gaussian Curvature for numerical integration
@@ -198,7 +232,7 @@ if __name__ == "__main__":
     else:
         print(f"Result: Average curvature is approximately {round(average_curvature)}. Check metric for singularities.")
 
-    # --- 9. Geodesic Control Law (Natural Geometry Path) ---
+    # --- 10. Geodesic Control Law (Natural Geometry Path) ---
     def geodesic_dynamics(t, state, get_inv_metric):
         """
         Hamiltonian equations for the Geodesic (No-Cost Path):
@@ -233,7 +267,7 @@ if __name__ == "__main__":
     )
     print("Geodesic Control Law (Dido move) computed.")
 
-    # --- 9. HJB Optimal Control Simulation ---
+    # --- 11. HJB Optimal Control Simulation ---
     target_conf = np.array([np.pi, 0.0])
     y0_hjb = [0, 0.1, 0, 0]
 
@@ -245,7 +279,7 @@ if __name__ == "__main__":
         t_eval=np.linspace(0, 20, 1000)
     )
 
-    # --- 10. Visualization ---
+    # --- 12. Visualization ---
     fig, axs = plt.subplots(1, 4, figsize=(22, 5))
 
     # Plot 1: Gaussian Curvature K
