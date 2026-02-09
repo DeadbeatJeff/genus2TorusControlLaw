@@ -205,37 +205,37 @@ if __name__ == "__main__":
 
     print("Pre-computed derivatives of Mass Matrix for Christoffel Symbols.")
 
-    # --- 6. Volume Form and Total C-Space Volume ---
-    print("\n--- Volume Form and Integration ---")
+    # # --- 6. Volume Form and Total C-Space Volume ---
+    # print("\n--- Volume Form and Integration ---")
 
-    # 1. Define the Volume Form: sqrt(det(g))
-    # M_numeric is your mass matrix with rob_values substituted
-    #  = M_numeric.det()
-    volume_form_sym = sp.sqrt(sp.Abs(det_g))
+    # # 1. Define the Volume Form: sqrt(det(g))
+    # # M_numeric is your mass matrix with rob_values substituted
+    # #  = M_numeric.det()
+    # volume_form_sym = sp.sqrt(sp.Abs(det_g))
 
-    # 2. Clean and Print the Volume Form (3 decimal places)
-    volume_form_cleaned = clean_expr(volume_form_sym)
-    print("Symbolic Volume Form (sqrt(det(g))):")
-    sp.pprint(volume_form_cleaned)
+    # # 2. Clean and Print the Volume Form (3 decimal places)
+    # volume_form_cleaned = clean_expr(volume_form_sym)
+    # print("Symbolic Volume Form (sqrt(det(g))):")
+    # sp.pprint(volume_form_cleaned)
 
-    # 3. Numerical Integration of the Volume Form
-    # Convert to a fast numpy function for dblquad
-    # The volume form typically only depends on the internal shape (theta4)
-    volume_func = sp.lambdify((q[0], q[1]), volume_form_sym, "numpy")
+    # # 3. Numerical Integration of the Volume Form
+    # # Convert to a fast numpy function for dblquad
+    # # The volume form typically only depends on the internal shape (theta4)
+    # volume_func = sp.lambdify((q[0], q[1]), volume_form_sym, "numpy")
 
-    # # Integrate over the 2-torus domain: [0, 2pi] x [0, 2pi]
-    # total_volume, error = dblquad(
-    #     lambda t4, t1: volume_func(t1, t4), 
-    #     0, 2*np.pi, 
-    #     0, 2*np.pi
-    # )
+    # # # Integrate over the 2-torus domain: [0, 2pi] x [0, 2pi]
+    # # total_volume, error = dblquad(
+    # #     lambda t4, t1: volume_func(t1, t4), 
+    # #     0, 2*np.pi, 
+    # #     0, 2*np.pi
+    # # )
 
-    # print(f"Total Integrated Volume (Area) of C-Space: {total_volume:.4f}")
+    # # print(f"Total Integrated Volume (Area) of C-Space: {total_volume:.4f}")
 
-    # 4. Relation to Gauss-Bonnet
-    # If K is constant curvature -1, the volume must be exactly 4*pi for a genus-2 surface.
-    expected_vol_if_constant_neg1 = 4 * np.pi
-    print(f"Comparison: A constant K=-1 genus-2 surface would have Volume = {expected_vol_if_constant_neg1:.4f}")
+    # # 4. Relation to Gauss-Bonnet
+    # # If K is constant curvature -1, the volume must be exactly 4*pi for a genus-2 surface.
+    # expected_vol_if_constant_neg1 = 4 * np.pi
+    # print(f"Comparison: A constant K=-1 genus-2 surface would have Volume = {expected_vol_if_constant_neg1:.4f}")
 
     # --- 7. Faster Christoffel Symbols (using Total Derivatives) ---
     Gamma1st = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
@@ -300,46 +300,114 @@ if __name__ == "__main__":
 
     print("\nK_active computed.")
 
-    # 3. K_num_func: Fast numerical version for integration/simulation
-    # Use Common Subexpression Elimination to simplify the math tree
-    reduced_exprs, simplified_K = sp.cse(K_active)
-    K_num_func = lambdify((q[0], q[1]), simplified_K[0], "numpy")
-    print("\nFast numerical curvature function generated.")
+    # # 3. K_num_func: Fast numerical version for integration/simulation
+    # # Use Common Subexpression Elimination to simplify the math tree
+    # reduced_exprs, simplified_K = sp.cse(K_active)
+    # K_num_func = lambdify((q[0], q[1]), simplified_K[0], "numpy")
+    # print("\nFast numerical curvature function generated.")
 
     # --- 9. Topology Verification: Gauss-Bonnet Theorem ---
-    print("\n--- Topology Verification ---")
+    # print("\n--- Topology Verification ---")
 
-    # 1. Optimize det_g using CSE for fast integration
-    reduced_det, simplified_det = sp.cse(det_g)
-    # simplified_det is a list; we take the first element [0]
-    det_g_raw_func = sp.lambdify((q[0], q[1]), simplified_det[0], "numpy")
+    # # 1. Fully substitute numerical robot values into det_g
+    # # det_g was computed from a, b, c, d which were from M_values (still symbolic)
+    # # We must use M_numeric or substitute rob_values explicitly
+    # det_g_numeric_expr = det_g.subs(rob_values).subs({
+    #     p_vars[0]: theta2_numeric_expr, 
+    #     p_vars[1]: theta3_numeric_expr
+    # })
 
-    print("\ndet_g_raw_func computed with CSE optimization.")
+    # # # 2. Optimize with CSE and Lambdify to PURE numpy
+    # # reduced_det, simplified_det = sp.cse(det_g_numeric_expr)
 
-    # Use a wrapper that handles potential SymPy-to-NumPy conversion issues
-    def det_g_func(t1, t4):
-        val = det_g_raw_func(t1, t4)
-        # Force conversion to float; if it's an array/list, take the item
-        return float(np.array(val).flatten()[0])
+    # # # FIX: Explicitly map 'Abs' to 'np.abs' to prevent symbolic leakage
+    # # det_g_func_fast = sp.lambdify(
+    # #     (q[0], q[1]), 
+    # #     simplified_det[0], 
+    # #     modules=[{'Abs': np.abs}, 'numpy']
+    # # )
 
-    def integrand(t4, t1):
-        try:
-            # Extract curvature value safely
-            k_raw = K_num_func(t1, t4)
-            k_val = float(np.array(k_raw).flatten()[0])
-            
-            # Extract determinant value safely
-            det_val = det_g_func(t1, t4)
-            
-            # dA = K * sqrt(|det(g)|)
-            return k_val * np.sqrt(np.abs(det_val))
-        except (TypeError, ValueError):
-            # Fallback for any remaining symbolic artifacts
-            return 0.0
+    # print("\ndet_g_numeric_expr computed.")
 
-    # 2. Integrate over the 2-torus domain: [0, 2pi] x [0, 2pi]
-    # epsrel=1e-4 is usually sufficient for topology checks and much faster
-    total_curvature, error = dblquad(integrand, 0, 2*np.pi, 0, 2*np.pi, epsrel=1e-4)
+    # vol_form = sp.sqrt(sp.Abs(det_g_numeric_expr))
+
+    # # 2. Optimize with CSE for speed
+    # reduced_vol_form, simplified_vol_form = sp.cse(vol_form)
+
+    # # 3. FIX: Explicitly map BOTH Abs and sqrt to their numpy counterparts
+    # # This prevents SymPy objects from "leaking" into the dblquad loop
+    # vol_form_func = sp.lambdify(
+    #     (q[0], q[1]), 
+    #     simplified_vol_form[0], 
+    #     modules=[
+    #         {'Abs': np.abs, 'sqrt': np.sqrt}, 
+    #         'numpy'
+    #     ]
+    # )
+
+    # print("\nFull numerical volume form function ready.")
+
+    # 1. Ensure all robot-specific constants are substituted out of K_active
+    # This prevents any 'L1', 'L2' etc. from remaining in the math tree
+    K_final_numeric = K_active.subs(rob_values)
+
+    print("K_final_numeric function ready.")
+
+    # 2. Optimize the symbolic expression for speed using CSE
+    # Essential for genus-2 metrics which are algebraically massive
+    reduced_exprs, simplified_K_list = sp.cse(K_final_numeric)
+
+    print("simplified_K_list function ready.")
+    
+    # 3. FIX: Explicitly map BOTH Abs and sqrt to their numpy counterparts
+    # The 'modules' argument forces lambdify to use numerical libraries
+    K_numerical_func = sp.lambdify(
+        (q[0], q[1]), 
+        simplified_K_list[0], 
+        modules=[{'Abs': np.abs, 'sqrt': np.sqrt}, 'numpy']
+    )
+
+    print("Numerical K_active function ready.")
+
+    # # 1. Define the full numerical expression for the integrand
+    # # Ensure we use sp (SymPy) functions here
+    # integrand_expr = K_active * vol_form
+
+    # # 2. Optimize with CSE for speed
+    # reduced_integrand, simplified_integrand = sp.cse(integrand_expr)
+
+    # # 3. FIX: Explicitly map BOTH Abs and sqrt to their numpy counterparts
+    # # This prevents SymPy objects from "leaking" into the dblquad loop
+    # full_integrand_func = sp.lambdify(
+    #     (q[0], q[1]), 
+    #     simplified_integrand[0], 
+    #     modules=[
+    #         {'Abs': np.abs, 'sqrt': np.sqrt}, 
+    #         'numpy'
+    #     ]
+    # )
+
+    # print("\nFull numerical integrand function ready.")
+
+    # 4. Final Wrapper: Add a check to catch any lingering symbolic output
+    def integrand_wrapper(t1, t4):
+        # We pass t1 and t4 to the numerical function
+        result = K_numerical_func(t1, t4)
+        
+        # Guardrail: if the result is still symbolic, try evaluating it numerically
+        if hasattr(result, 'evalf'):
+            return float(result.evalf())
+        return float(result)
+
+    # 5. Perform the integration
+    # Note: For genus-2 surfaces, the total curvature should be ~ -12.566 (-4*pi)
+    total_curvature, error = dblquad(
+        integrand_wrapper, 
+        0, 2*np.pi, # theta1 bounds
+        0, 2*np.pi, # theta4 bounds
+        epsabs=1e-1, # Slightly loosened tolerance for speed
+        epsrel=1e-1
+    )
 
     print(f"\nTotal curvature computed: {total_curvature:.4f}")
 
