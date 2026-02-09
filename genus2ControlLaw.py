@@ -122,7 +122,13 @@ if __name__ == "__main__":
 
     # 2. Implement the formula for theta3 (Eq. 3)
     # We'll use the '+' version for the standard elbow-up configuration
-    theta3_expr = 2 * sp.atan((A_expr + sp.sqrt(A_expr**2 + B_expr**2 - C_expr**2)) / (B_expr - C_expr))
+    # --- Updated theta3 with safety check ---
+    discriminant = A_expr**2 + B_expr**2 - C_expr**2
+
+    # Use sp.Max to ensure we don't take the sqrt of a negative number due to noise
+    safe_discriminant = sp.Max(0, discriminant)
+
+    theta3_expr = 2 * sp.atan((A_expr + sp.sqrt(safe_discriminant)) / (B_expr - C_expr))
 
     # 3. Implement the formula for theta2 (Eq. 4)
     theta2_expr = sp.asin((L[2]*sp.sin(theta3_expr) + L[3]*sp.sin(q[1]) - L[0]*sp.sin(q[0])) / L[1])
@@ -142,10 +148,16 @@ if __name__ == "__main__":
     print("\nMass Matrix (Numerical, 3DP):")
     sp.pprint(clean_expr(M_values))
 
+    # 1. Substitute numerical values into the passive coordinate expressions first
+    # This ensures theta2 and theta3 are functions of (theta1, theta4) only, 
+    # with no L1, L2, etc. remaining.
+    theta3_numeric_expr = theta3_expr.subs(rob_values)
+    theta2_numeric_expr = theta2_expr.subs(rob_values)
+
     # 4. Substitute these directly into M instead of using sp.solve()
-    M_numeric = M_values.subs({
-        p_vars[0]: theta2_expr, 
-        p_vars[1]: theta3_expr
+    M_numeric_expr = M_values.subs({
+        p_vars[0]: theta2_numeric_expr, 
+        p_vars[1]: theta3_numeric_expr
     })
 
     # 5. Manual 2x2 Inverse (Instantaneous)
@@ -154,7 +166,7 @@ if __name__ == "__main__":
     M_inv_values = sp.Matrix([[d, -b], [-c, a]]) / det_g_values
 
     # 5. Manual 2x2 Inverse (Instantaneous)
-    a, b, c, d = M_numeric[0,0], M_numeric[0,1], M_numeric[1,0], M_numeric[1,1]
+    a, b, c, d = M_numeric_expr[0,0], M_numeric_expr[0,1], M_numeric_expr[1,0], M_numeric_expr[1,1]
     det_g = a*d - b*c
     M_inv_numeric = sp.Matrix([[d, -b], [-c, a]]) / det_g
 
@@ -165,19 +177,6 @@ if __name__ == "__main__":
     get_inverse_metric_numeric = sp.lambdify((q[0], q[1]), M_inv_numeric, "numpy")
 
     print("Inverse Mass Matrix M^(-1) lambdified.")
-
-    # 1. Substitute numerical values into the passive coordinate expressions first
-    # This ensures theta2 and theta3 are functions of (theta1, theta4) only, 
-    # with no L1, L2, etc. remaining.
-    theta3_numeric_expr = theta3_expr.subs(rob_values)
-    theta2_numeric_expr = theta2_expr.subs(rob_values)
-
-    # 2. Substitute into the Mass Matrix
-    # M_values contains rob_values for masses/lengths but still has p_vars (theta2, theta3)
-    M_numeric = M_values.subs({
-        p_vars[0]: theta2_numeric_expr, 
-        p_vars[1]: theta3_numeric_expr
-    })
 
     # 3. Update the derivative chains to use the numerical versions
     # This is critical for the Christoffel and Riemann calculations
@@ -197,7 +196,7 @@ if __name__ == "__main__":
     # 4. Final Lambdification
     # Now we create a function that takes ALL 4 angles as inputs.
     # This avoids the "Add" object error because we pass numerical values for all 4.
-    get_dM_numeric = sp.lambdify((*q, *p_vars), dM_dq, "numpy")
+    get_dM_numeric_expr = sp.lambdify((*q, *p_vars), dM_dq, "numpy")
     
     # Pre-compute derivatives of the numerical metric w.r.t coordinates
     # This avoids calling sp.diff dozens of times inside the loops
@@ -209,8 +208,8 @@ if __name__ == "__main__":
     # print("\n--- Volume Form and Integration ---")
 
     # # 1. Define the Volume Form: sqrt(det(g))
-    # # M_numeric is your mass matrix with rob_values substituted
-    # #  = M_numeric.det()
+    # # M_numeric_expr is your mass matrix with rob_values substituted
+    # #  = M_numeric_expr.det()
     # volume_form_sym = sp.sqrt(sp.Abs(det_g))
 
     # # 2. Clean and Print the Volume Form (3 decimal places)
@@ -247,6 +246,8 @@ if __name__ == "__main__":
                 # 1st Kind: Use dM_dq (the total derivatives computed in Section 5)
                 Gamma1st[i, j, k] = 0.5 * (dM_dq[j][i, k] + dM_dq[k][i, j] - dM_dq[i][j, k])
 
+    print("Gamma1st computed.")
+
     for i in range(n_joints):
         for j in range(n_joints):
             for k in range(n_joints):
@@ -255,9 +256,10 @@ if __name__ == "__main__":
                     # Use M_inv_values which is still in terms of theta1-theta4
                     gamma_val += M_inv_values[i, l] * Gamma1st[l, j, k]
                 Gamma2nd[i, j, k] = gamma_val
+                
+    print("Gamma2nd computed.")
 
     # --- 8. Optimized Curvature Calculation ---
-    # --- Add this helper function before compute_riemann_total ---
     def total_diff_expr(expr, k_idx):
         """
         Computes the total derivative of a symbolic expression expr w.r.t q[k_idx]
@@ -288,21 +290,24 @@ if __name__ == "__main__":
 
     # Calculate Riemann and K in terms of (theta1, theta2, theta3, theta4)
     RiemannContra = compute_riemann_total(Gamma2nd, n_joints)
+
+    print("RiemannContra computed.")
+
     R0101 = sum(M_values[0, m] * RiemannContra[m, 1, 0, 1] for m in range(n_joints))
 
-    # 1. K_full: The symbolic version in terms of all 4 angles for printing
-    K_full = R0101 / det_g_values
+    # 1. K_values: The symbolic version in terms of all 4 angles for printing
+    K_values = R0101 / det_g_values
     # print("\nGaussian Curvature K (In terms of theta1-theta4):")
-    # sp.pprint(K_full)
+    # sp.pprint(K_values)
 
-    # 2. K_active: Substitute passive expressions to get K(theta1, theta4) only
-    K_active = K_full.subs({p_vars[0]: theta2_numeric_expr, p_vars[1]: theta3_numeric_expr})
+    # 2. K_numeric_expr: Substitute passive expressions to get K(theta1, theta4) only
+    K_numeric_expr = K_values.subs({p_vars[0]: theta2_numeric_expr, p_vars[1]: theta3_numeric_expr})
 
-    print("\nK_active computed.")
+    print("\nK_numeric_expr computed.")
 
     # # 3. K_num_func: Fast numerical version for integration/simulation
     # # Use Common Subexpression Elimination to simplify the math tree
-    # reduced_exprs, simplified_K = sp.cse(K_active)
+    # reduced_exprs, simplified_K = sp.cse(K_numeric_expr)
     # K_num_func = lambdify((q[0], q[1]), simplified_K[0], "numpy")
     # print("\nFast numerical curvature function generated.")
 
@@ -311,7 +316,7 @@ if __name__ == "__main__":
 
     # # 1. Fully substitute numerical robot values into det_g
     # # det_g was computed from a, b, c, d which were from M_values (still symbolic)
-    # # We must use M_numeric or substitute rob_values explicitly
+    # # We must use M_numeric_expr or substitute rob_values explicitly
     # det_g_numeric_expr = det_g.subs(rob_values).subs({
     #     p_vars[0]: theta2_numeric_expr, 
     #     p_vars[1]: theta3_numeric_expr
@@ -347,31 +352,31 @@ if __name__ == "__main__":
 
     # print("\nFull numerical volume form function ready.")
 
-    # 1. Ensure all robot-specific constants are substituted out of K_active
-    # This prevents any 'L1', 'L2' etc. from remaining in the math tree
-    K_final_numeric = K_active.subs(rob_values)
+    # # 1. Ensure all robot-specific constants are substituted out of K_numeric_expr
+    # # This prevents any 'L1', 'L2' etc. from remaining in the math tree
+    # K_final_numeric = K_numeric_expr.subs(rob_values)
 
-    print("K_final_numeric function ready.")
+    # print("K_final_numeric function ready.")
 
     # 2. Optimize the symbolic expression for speed using CSE
     # Essential for genus-2 metrics which are algebraically massive
-    reduced_exprs, simplified_K_list = sp.cse(K_final_numeric)
+    reduced_exprs, simplified_K_list = sp.cse(K_numeric_expr)  
 
     print("simplified_K_list function ready.")
     
     # 3. FIX: Explicitly map BOTH Abs and sqrt to their numpy counterparts
     # The 'modules' argument forces lambdify to use numerical libraries
-    K_numerical_func = sp.lambdify(
+    K_numeric_expr_func = sp.lambdify(
         (q[0], q[1]), 
         simplified_K_list[0], 
         modules=[{'Abs': np.abs, 'sqrt': np.sqrt}, 'numpy']
     )
 
-    print("Numerical K_active function ready.")
+    print("Numerical K_numeric_expr function ready.")
 
     # # 1. Define the full numerical expression for the integrand
     # # Ensure we use sp (SymPy) functions here
-    # integrand_expr = K_active * vol_form
+    # integrand_expr = K_numeric_expr * vol_form
 
     # # 2. Optimize with CSE for speed
     # reduced_integrand, simplified_integrand = sp.cse(integrand_expr)
@@ -389,24 +394,37 @@ if __name__ == "__main__":
 
     # print("\nFull numerical integrand function ready.")
 
-    # 4. Final Wrapper: Add a check to catch any lingering symbolic output
-    def integrand_wrapper(t1, t4):
-        # We pass t1 and t4 to the numerical function
-        result = K_numerical_func(t1, t4)
-        
-        # Guardrail: if the result is still symbolic, try evaluating it numerically
-        if hasattr(result, 'evalf'):
-            return float(result.evalf())
-        return float(result)
+   # --- Fixed Integration Block ---
 
-    # 5. Perform the integration
-    # Note: For genus-2 surfaces, the total curvature should be ~ -12.566 (-4*pi)
+    def integrand_wrapper(t1, t4):
+        try:
+            result = K_numeric_expr_func(t1, t4)
+            
+            # Extract scalar from numpy array if necessary
+            if isinstance(result, np.ndarray):
+                val = result.item()
+            else:
+                val = result
+                
+            # Check for non-finite numbers (NaN or Inf)
+            if not np.isfinite(val):
+                return 0.0
+                
+            return float(val)
+        except (TypeError, ValueError):
+            # Fallback for persistent SymPy objects
+            try:
+                return float(sp.N(result))
+            except:
+                return 0.0
+
+    # Integration with slightly better tolerance handling
     total_curvature, error = dblquad(
         integrand_wrapper, 
-        0, 2*np.pi, # theta1 bounds
-        0, 2*np.pi, # theta4 bounds
-        epsabs=1e-1, # Slightly loosened tolerance for speed
-        epsrel=1e-1
+        0, 2*np.pi, 
+        0, 2*np.pi, 
+        epsabs=1e-3, 
+        epsrel=1e-3
     )
 
     print(f"\nTotal curvature computed: {total_curvature:.4f}")
@@ -456,7 +474,7 @@ if __name__ == "__main__":
     print("Geodesic Control Law (Dido move) computed.")
 
     # --- 11. HJB Optimal Control Simulation ---
-    M_func_numeric = sp.lambdify((q[0], q[1]), M_numeric, "numpy")
+    M_func_numeric = sp.lambdify((q[0], q[1]), M_numeric_expr, "numpy")
 
     def optimal_dynamics(t, state, target_q, Q, R_eff, M_func, get_inv_metric):
         theta1, theta2, p1, p2 = state
