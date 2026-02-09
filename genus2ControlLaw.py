@@ -236,28 +236,34 @@ if __name__ == "__main__":
     # expected_vol_if_constant_neg1 = 4 * np.pi
     # print(f"Comparison: A constant K=-1 genus-2 surface would have Volume = {expected_vol_if_constant_neg1:.4f}")
 
-    # --- 7. Faster Christoffel Symbols (using Total Derivatives) ---
+    # --- 7. Corrected Christoffel Symbols ---
+    # Ensure we use the total derivatives (dM_dq) which include the chain rule
     Gamma1st = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
     Gamma2nd = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
 
     for i in range(n_joints):
         for j in range(n_joints):
             for k in range(n_joints):
-                # 1st Kind: Use dM_dq (the total derivatives computed in Section 5)
-                Gamma1st[i, j, k] = 0.5 * (dM_dq[j][i, k] + dM_dq[k][i, j] - dM_dq[i][j, k])
+                # Applying: 0.5 * (dg_ik/dqj + dg_ij/dqk - dg_jk/dqi)
+                # dM_dq[j] is the total derivative of the matrix M w.r.t q[j]
+                term1 = dM_dq[j][i, k]
+                term2 = dM_dq[k][i, j]
+                term3 = dM_dq[i][j, k]
+                Gamma1st[i, j, k] = 0.5 * (term1 + term2 - term3)
 
-    print("Gamma1st computed.")
+    print("Gamma1st computed using Total Derivatives.")
 
+    # 2nd Kind: Gamma^i_jk = g^il * Gamma_ljk
     for i in range(n_joints):
         for j in range(n_joints):
             for k in range(n_joints):
                 gamma_val = 0
                 for l in range(n_joints):
-                    # Use M_inv_values which is still in terms of theta1-theta4
+                    # Use the symbolic inverse M_inv_values
                     gamma_val += M_inv_values[i, l] * Gamma1st[l, j, k]
                 Gamma2nd[i, j, k] = gamma_val
-                
-    print("Gamma2nd computed.")
+                    
+    print("Gamma2nd (Christoffel 2nd Kind) computed.")
 
     # --- 8. Optimized Curvature Calculation ---
     def total_diff_expr(expr, k_idx):
