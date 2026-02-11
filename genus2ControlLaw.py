@@ -183,26 +183,60 @@ if __name__ == "__main__":
     dth3_dq = [sp.diff(theta3_numeric_expr, q[0]), sp.diff(theta3_numeric_expr, q[1])]
     dth2_dq = [sp.diff(theta2_numeric_expr, q[0]), sp.diff(theta2_numeric_expr, q[1])]
 
-    # 4. Compute the Total Derivative of M using the numerical chain
-    dM_dq = []
-    for j in range(2):
-        total_diff = (
-            sp.diff(M_values, q[j]) + 
-            sp.diff(M_values, p_vars[0]) * dth2_dq[j] + 
-            sp.diff(M_values, p_vars[1]) * dth3_dq[j]
-        )
-        dM_dq.append(total_diff)
+    # 1. Define the Coordinate Mapping Gradient (dq_all / dq_active)
+    # This represents [dth1/dth1, dth1/dth4; dth2/dth1, dth2/dth4; ...]
+    # p_grad_active contains [dth2/dq, dth3/dq] which you already computed as dth2_dq, dth3_dq
+    I_active = sp.eye(2)
+    # Create a 4x2 matrix representing the transformation from active to full coordinates
+    # --- Fix for Line 191 in your provided traceback ---
+    # Convert the lists [d/dq1, d/dq4] into 1x2 row matrices
+    dth2_mat = sp.Matrix([dth2_dq]) # Shape (1, 2)
+    dth3_mat = sp.Matrix([dth3_dq]) # Shape (1, 2)
 
-    # 4. Final Lambdification
-    # Now we create a function that takes ALL 4 angles as inputs.
-    # This avoids the "Add" object error because we pass numerical values for all 4.
-    get_dM_numeric_expr = sp.lambdify((*q, *p_vars), dM_dq, "numpy")
+    # Identity rows for the active variables (dth1/dq and dth4/dq)
+    row_th1 = sp.Matrix([[1, 0]])
+    row_th4 = sp.Matrix([[0, 1]])
+
+    # Stack them in order: theta1, theta2, theta3, theta4
+    Full_Jacobian = sp.Matrix.vstack(row_th1, dth2_mat, dth3_mat, row_th4)
+
+    # 2. Total Derivative of the Metric
+    def get_total_derivative_M(k_idx):
+        """
+        Computes dM/dq_k using the chain rule explicitly.
+        k_idx is 0 (theta1) or 1 (theta4)
+        """
+        # Partial w.r.t active coordinate + Chain rule for passive coordinates
+        dM_total = sp.diff(M_values, q[k_idx])
+        dM_total += sp.diff(M_values, p_vars[0]) * dth2_dq[k_idx]
+        dM_total += sp.diff(M_values, p_vars[1]) * dth3_dq[k_idx]
+        return dM_total
     
-    # Pre-compute derivatives of the numerical metric w.r.t coordinates
-    # This avoids calling sp.diff dozens of times inside the loops
-    dM = [M_values.diff(Theta[k]) for k in range(n_joints)]
+    # Pre-compute total derivatives dM/dq1 and dM/dq4
+    dM_total_list = [get_total_derivative_M(0), get_total_derivative_M(1)]
 
-    print("Pre-computed derivatives of Mass Matrix for Christoffel Symbols.")
+    print("Pre-computed dM_total_list for Christoffel Symbols.")
+
+    # # 4. Compute the Total Derivative of M using the numerical chain
+    # dM_dq = []
+    # for j in range(2):
+    #     total_diff = (
+    #         sp.diff(M_values, q[j]) + 
+    #         sp.diff(M_values, p_vars[0]) * dth2_dq[j] + 
+    #         sp.diff(M_values, p_vars[1]) * dth3_dq[j]
+    #     )
+    #     dM_dq.append(total_diff)
+
+    # # 4. Final Lambdification
+    # # Now we create a function that takes ALL 4 angles as inputs.
+    # # This avoids the "Add" object error because we pass numerical values for all 4.
+    # get_dM_numeric_expr = sp.lambdify((*q, *p_vars), dM_dq, "numpy")
+    
+    # # Pre-compute derivatives of the numerical metric w.r.t coordinates
+    # # This avoids calling sp.diff dozens of times inside the loops
+    # dM = [M_values.diff(Theta[k]) for k in range(n_joints)]
+
+    # print("Pre-computed derivatives of Mass Matrix for Christoffel Symbols.")
 
     # # --- 6. Volume Form and Total C-Space Volume ---
     # print("\n--- Volume Form and Integration ---")
@@ -241,15 +275,14 @@ if __name__ == "__main__":
     Gamma1st = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
     Gamma2nd = sp.MutableDenseNDimArray.zeros(n_joints, n_joints, n_joints)
 
+    # 3. Corrected Christoffel Symbols (1st Kind)
     for i in range(n_joints):
         for j in range(n_joints):
             for k in range(n_joints):
-                # Applying: 0.5 * (dg_ik/dqj + dg_ij/dqk - dg_jk/dqi)
-                # dM_dq[j] is the total derivative of the matrix M w.r.t q[j]
-                term1 = dM_dq[j][i, k]
-                term2 = dM_dq[k][i, j]
-                term3 = dM_dq[i][j, k]
-                Gamma1st[i, j, k] = 0.5 * (term1 + term2 - term3)
+                # Using the pre-computed TOTAL derivatives
+                Gamma1st[i, j, k] = 0.5 * (dM_total_list[j][i, k] + 
+                                        dM_total_list[k][i, j] - 
+                                        dM_total_list[i][j, k])
 
     print("Gamma1st computed using Total Derivatives.")
 
@@ -266,15 +299,28 @@ if __name__ == "__main__":
     print("Gamma2nd (Christoffel 2nd Kind) computed.")
 
     # --- 8. Optimized Curvature Calculation ---
+    # Pre-compute Hessians of passive variables w.r.t active variables
+    d2th2_dq2 = [[sp.diff(theta2_numeric_expr, q[i], q[j]) for j in range(2)] for i in range(2)]
+    d2th3_dq2 = [[sp.diff(theta3_numeric_expr, q[i], q[j]) for j in range(2)] for i in range(2)]
+
+    # 1. Define symbolic placeholders for 1st derivatives
+    dth2_S = [sp.symbols(f'dth2_dq{i}') for i in range(2)]
+    dth3_S = [sp.symbols(f'dth3_dq{i}') for i in range(2)]
+
+    # 2. When computing Gamma, substitute the complex dth2_dq[i] with dth2_S[i]
+    Gamma_symbolic = Gamma2nd.applyfunc(lambda x: x.subs({dth2_dq[i]: dth2_S[i] for i in range(2)}))
+
     def total_diff_expr(expr, k_idx):
-        """
-        Computes the total derivative of a symbolic expression expr w.r.t q[k_idx]
-        using the chain rule for passive variables theta2 and theta3.
-        """
-        # Partial w.r.t active q[k_idx] + partials w.r.t passive vars * their gradients
-        return (sp.diff(expr, q[k_idx]) + 
-                sp.diff(expr, p_vars[0]) * dth2_dq[k_idx] + 
-                sp.diff(expr, p_vars[1]) * dth3_dq[k_idx])
+        # Now sp.diff(expr, dth2_S[0]) will actually work!
+        term_active = sp.diff(expr, q[k_idx])
+        term_passive = sp.diff(expr, p_vars[0])*dth2_dq[k_idx] + sp.diff(expr, p_vars[1])*dth3_dq[k_idx]
+        
+        # Second-order terms using the placeholder symbols
+        term_hessian = (sp.diff(expr, dth2_dq[0]) * d2th2_dq2[0][k_idx] + 
+                    sp.diff(expr, dth2_dq[1]) * d2th2_dq2[1][k_idx] +
+                    sp.diff(expr, dth3_dq[0]) * d2th3_dq2[0][k_idx] +
+                    sp.diff(expr, dth3_dq[1]) * d2th3_dq2[1][k_idx])
+        return term_active + term_passive + term_hessian
 
     # --- Updated compute_riemann_total ---
     def compute_riemann_total(Gamma, n):
