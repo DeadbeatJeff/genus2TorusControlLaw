@@ -136,9 +136,9 @@ if __name__ == "__main__":
     # print("\nM_subs matrix computed with passive variables substituted.")
     
     rob_values = {
-        L[0]: 4.0, L[1]: 30.0, L[2]: 30.0, L[3]: 4.0, L[4]: 10.0,
-        m[0]: 0.1, m[1]: 0.5, m[2]: 0.5, m[3]: 0.1,
-        Izz[0]: 0.001, Izz[1]: 0.001, Izz[2]: 0.001, Izz[3]: 0.001,
+        L[0]: 0.125, L[1]: 0.250, L[2]: 0.250, L[3]: 0.125, L[4]: 0.500,
+        m[0]: 0.091, m[1]: 0.181, m[2]: 0.181, m[3]: 0.091,
+        Izz[0]: 0.0005, Izz[1]: 0.001, Izz[2]: 0.001, Izz[3]: 0.0005,
         g_sym: 9.81
     }
 
@@ -217,26 +217,10 @@ if __name__ == "__main__":
 
     print("Pre-computed dM_total_list for Christoffel Symbols.")
 
-    # # 4. Compute the Total Derivative of M using the numerical chain
-    # dM_dq = []
-    # for j in range(2):
-    #     total_diff = (
-    #         sp.diff(M_values, q[j]) + 
-    #         sp.diff(M_values, p_vars[0]) * dth2_dq[j] + 
-    #         sp.diff(M_values, p_vars[1]) * dth3_dq[j]
-    #     )
-    #     dM_dq.append(total_diff)
-
     # # 4. Final Lambdification
     # # Now we create a function that takes ALL 4 angles as inputs.
     # # This avoids the "Add" object error because we pass numerical values for all 4.
-    # get_dM_numeric_expr = sp.lambdify((*q, *p_vars), dM_dq, "numpy")
-    
-    # # Pre-compute derivatives of the numerical metric w.r.t coordinates
-    # # This avoids calling sp.diff dozens of times inside the loops
-    # dM = [M_values.diff(Theta[k]) for k in range(n_joints)]
-
-    # print("Pre-computed derivatives of Mass Matrix for Christoffel Symbols.")
+    dM_numeric_expr = sp.lambdify((*q, *p_vars), dM_total_list, "numpy")
 
     # # --- 6. Volume Form and Total C-Space Volume ---
     # print("\n--- Volume Form and Integration ---")
@@ -303,24 +287,46 @@ if __name__ == "__main__":
     d2th2_dq2 = [[sp.diff(theta2_numeric_expr, q[i], q[j]) for j in range(2)] for i in range(2)]
     d2th3_dq2 = [[sp.diff(theta3_numeric_expr, q[i], q[j]) for j in range(2)] for i in range(2)]
 
-    # 1. Define symbolic placeholders for 1st derivatives
-    dth2_S = [sp.symbols(f'dth2_dq{i}') for i in range(2)]
-    dth3_S = [sp.symbols(f'dth3_dq{i}') for i in range(2)]
+    # --- Corrected Section for Riemann Calculation ---
 
-    # 2. When computing Gamma, substitute the complex dth2_dq[i] with dth2_S[i]
-    Gamma_symbolic = Gamma2nd.applyfunc(lambda x: x.subs({dth2_dq[i]: dth2_S[i] for i in range(2)}))
+    # 1. Define symbolic placeholders for the complex first derivatives
+    # This prevents SymPy from trying to differentiate "with respect to an equation"
+    dth2_S = [sp.symbols(f'dth2_dummy_{i}') for i in range(2)]
+    dth3_S = [sp.symbols(f'dth3_dummy_{i}') for i in range(2)]
 
     def total_diff_expr(expr, k_idx):
-        # Now sp.diff(expr, dth2_S[0]) will actually work!
-        term_active = sp.diff(expr, q[k_idx])
-        term_passive = sp.diff(expr, p_vars[0])*dth2_dq[k_idx] + sp.diff(expr, p_vars[1])*dth3_dq[k_idx]
+        """
+        Computes the total derivative of an expression wrt q[k_idx] 
+        by handling nested derivatives as symbols.
+        """
+        # Create a substitution map: complex derivative -> simple dummy symbol
+        subs_map = {
+            dth2_dq[0]: dth2_S[0], dth2_dq[1]: dth2_S[1],
+            dth3_dq[0]: dth3_S[0], dth3_dq[1]: dth3_S[1]
+        }
+        inv_subs_map = {v: k for k, v in subs_map.items()}
+
+        # 1. Replace complex derivatives with dummies in the expression
+        temp_expr = expr.subs(subs_map)
         
-        # Second-order terms using the placeholder symbols
-        term_hessian = (sp.diff(expr, dth2_dq[0]) * d2th2_dq2[0][k_idx] + 
-                    sp.diff(expr, dth2_dq[1]) * d2th2_dq2[1][k_idx] +
-                    sp.diff(expr, dth3_dq[0]) * d2th3_dq2[0][k_idx] +
-                    sp.diff(expr, dth3_dq[1]) * d2th3_dq2[1][k_idx])
-        return term_active + term_passive + term_hessian
+        # 2. Partial w.r.t active coordinate
+        term_active = sp.diff(temp_expr, q[k_idx])
+        
+        # 3. Chain rule for passive coordinates (theta2, theta3)
+        term_passive = (sp.diff(temp_expr, p_vars[0]) * subs_map[dth2_dq[k_idx]] + 
+                        sp.diff(temp_expr, p_vars[1]) * subs_map[dth3_dq[k_idx]])
+        
+        # 4. Chain rule for the derivatives themselves (using placeholders)
+        # d/dq_k (dth_i/dq_j) = d2th_i / (dq_j dq_k)
+        term_hessian = (sp.diff(temp_expr, dth2_S[0]) * d2th2_dq2[0][k_idx] + 
+                        sp.diff(temp_expr, dth2_S[1]) * d2th2_dq2[1][k_idx] +
+                        sp.diff(temp_expr, dth3_S[0]) * d2th3_dq2[0][k_idx] +
+                        sp.diff(temp_expr, dth3_S[1]) * d2th3_dq2[1][k_idx])
+        
+        total = term_active + term_passive + term_hessian
+        
+        # 5. Substitute original complex expressions back in
+        return total.subs(inv_subs_map)
 
     # --- Updated compute_riemann_total ---
     def compute_riemann_total(Gamma, n):
