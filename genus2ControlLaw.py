@@ -382,25 +382,25 @@ if __name__ == "__main__":
 #     plt.grid(True)
 #     plt.show()
 
-#     # Plot 3: HJB State Convergence
-#     plt.figure(figsize=(8, 6))
-#     plt.plot(sol_hjb.t, sol_hjb.y[0], label=r'$\theta_1$')
-#     plt.plot(sol_hjb.t, sol_hjb.y[1], label=r'$\theta_4$')
-#     plt.axhline(target_conf[0], color='r', linestyle='--', alpha=0.5, label='Target')
-#     plt.title("HJB State Convergence")
-#     plt.xlabel("Time (s)")
-#     plt.ylabel("Angle (rad)")
-#     plt.legend()
-#     plt.grid(True)
-#     plt.show()
+    # Plot 3: HJB State Convergence
+    plt.figure(figsize=(8, 6))
+    plt.plot(sol_hjb.t, sol_hjb.y[0], label=r'$\theta_1$')
+    plt.plot(sol_hjb.t, sol_hjb.y[1], label=r'$\theta_4$')
+    plt.axhline(target_conf[0], color='r', linestyle='--', alpha=0.5, label='Target')
+    plt.title("HJB State Convergence")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Angle (rad)")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
-#     # Plot 4: HJB Path on C-Space
-#     plt.figure(figsize=(8, 6))
-#     plt.plot(sol_hjb.y[0] % (2*np.pi), sol_hjb.y[1] % (2*np.pi), color='green', lw=2)
-#     plt.xlabel(r'$\theta_1$')
-#     plt.ylabel(r'$\theta_4$')
-#     plt.title("Optimal HJB Path in Configuration Space")
-#     plt.grid(True)
+    # Plot 4: HJB Path on C-Space
+    plt.figure(figsize=(8, 6))
+    plt.plot(sol_hjb.y[0] % (2*np.pi), sol_hjb.y[1] % (2*np.pi), color='green', lw=2)
+    plt.xlabel(r'$\theta_1$')
+    plt.ylabel(r'$\theta_4$')
+    plt.title("Optimal HJB Path in Configuration Space")
+    plt.grid(True)
 #     plt.show()
 
 #     # --- 12. Optimized Curvature Calculation ---
