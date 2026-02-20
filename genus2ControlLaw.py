@@ -295,7 +295,7 @@ if __name__ == "__main__":
         
         # 3. Compute dp/dt using a numerical central difference for the Hamiltonian gradient
         # This represents the "fictitious forces" from the manifold's curvature
-        eps = 1e-6
+        eps = 1e-3
         
         # Hamiltonian H = 0.5 * p^T * g^-1(q) * p
         def get_h(phi1, phi2):
