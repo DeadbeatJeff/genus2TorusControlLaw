@@ -11,6 +11,11 @@ Q = np.diag([10.0, 10.0, 1.0, 1.0])
 # R_effort: Penalty for motor torque u
 R_effort = np.diag([0.1, 0.1])
 
+# Geometric parameters for the genus-2 double-torus embedding
+D_CENTER = 1.40
+R_MAJOR = 1.05
+R_TUBE = 0.45
+
 
 def dh_htm(theta1, theta2, r, d):
     """Computes the standard DH Homogeneous Transformation Matrix."""
@@ -120,109 +125,141 @@ def controlled_dynamics(t, state, target_q, Q, R_effort, get_inv_metric):
     return [q_dot[0], q_dot[1], dp1 + u[0], dp2 + u[1]]
 
 
-def patch1_embedding(theta1, theta2):
+def patch1_surface(theta1, theta2):
     """
     Coordinate Patch 1 (c-patch 1) parameterized by (theta1, theta2),
-    covering the left lobe and central bridge of the genus-2 surface.
+    covering the left toroidal lobe of the genus-2 surface.
     """
-    t1 = np.asarray(theta1, dtype=float)
-    t2 = np.asarray(theta2, dtype=float)
-    x = -1.65 + 1.15 * np.cos(t1) + 0.55 * np.cos(t2) * np.cos(t1)
-    y = 1.15 * np.sin(t1) + 0.55 * np.cos(t2) * np.sin(t1)
-    z = 0.55 * np.sin(t2)
-    return np.stack([x, y, z], axis=-1)
+    flare = 1.0 + 0.22 * np.exp(-((np.sin(theta1 / 2.0)) ** 2) / 0.14)
+    x = -D_CENTER + (R_MAJOR + R_TUBE * np.cos(theta2) * flare) * np.cos(theta1)
+    y = (R_MAJOR + R_TUBE * np.cos(theta2) * flare) * np.sin(theta1)
+    z = R_TUBE * np.sin(theta2) * (1.0 + 0.10 * np.exp(-((np.sin(theta1 / 2.0)) ** 2) / 0.14))
+    return np.array([x, y, z])
 
 
-def patch2_embedding(theta3, theta4):
+def patch2_surface(theta3, theta4):
     """
     Coordinate Patch 2 (c-patch 2) parameterized by (theta3, theta4),
-    covering the central bridge and right lobe of the genus-2 surface.
+    covering the right toroidal lobe of the genus-2 surface.
     """
-    t3 = np.asarray(theta3, dtype=float)
-    t4 = np.asarray(theta4, dtype=float)
-    x = 1.65 - 1.15 * np.cos(t3) - 0.55 * np.cos(t4) * np.cos(t3)
-    y = 1.15 * np.sin(t3) + 0.55 * np.cos(t4) * np.sin(t3)
-    z = 0.55 * np.sin(t4)
-    return np.stack([x, y, z], axis=-1)
+    flare = 1.0 + 0.22 * np.exp(-((np.sin(theta3 / 2.0)) ** 2) / 0.14)
+    x = D_CENTER - (R_MAJOR + R_TUBE * np.cos(theta4) * flare) * np.cos(theta3)
+    y = (R_MAJOR + R_TUBE * np.cos(theta4) * flare) * np.sin(theta3)
+    z = R_TUBE * np.sin(theta4) * (1.0 + 0.10 * np.exp(-((np.sin(theta3 / 2.0)) ** 2) / 0.14))
+    return np.array([x, y, z])
 
 
-def solve_patch_angles_on_the_fly(theta1_val, theta4_val, th2_init=0.0, th3_init=0.0):
+def solve_theta2_theta3_on_the_fly(theta1_val, theta4_val, th2_init=0.0, th3_init=0.0):
     """
     Solves for angles theta2 (in c-patch 1) and theta3 (in c-patch 2) on the fly
-    so that the two coordinate charts align smoothly in 3D space along the
-    transition between patch 1 (theta1, theta2) and patch 2 (theta3, theta4).
+    so that the two coordinate charts match smoothly across the central saddle waist.
     """
     def residual(vars_23):
         th2, th3 = vars_23
-        p1 = patch1_embedding(theta1_val, th2)
-        p2 = patch2_embedding(th3, theta4_val)
-        # Enforce smooth bridge alignment across the midplane
-        bridge_target = np.array([0.0, 0.55 * np.sin(theta1_val), 0.55 * np.sin(theta4_val)])
+        p1 = patch1_surface(theta1_val, th2)
+        p2 = patch2_surface(th3, theta4_val)
+        neck_mid = np.array([0.0, 0.42 * np.sin(theta1_val), R_TUBE * np.sin(theta4_val)])
         return np.concatenate([
-            p1 - bridge_target,
-            p2 - bridge_target,
-            [np.sin(th2 - theta1_val), np.sin(th3 - theta4_val)],
+            p1 - neck_mid,
+            p2 - neck_mid,
+            [0.35 * np.sin(th2 - theta4_val), 0.35 * np.sin(th3 - theta1_val)],
         ])
 
-    res = least_squares(residual, x0=[th2_init, th3_init], method="lm")
-    return float(res.x[0]), float(res.x[1])
+    sol = least_squares(residual, x0=[th2_init, th3_init], method="lm")
+    return float(sol.x[0]), float(sol.x[1])
 
 
-def genus2_two_patch_point(theta1, theta2, theta3, theta4):
+def build_seamless_genus2_surface(n_u=88, n_v=36):
     """
-    Evaluates a point on the genus-2 surface by blending c-patch 1 (theta1, theta2)
-    and c-patch 2 (theta3, theta4) smoothly across the transition region.
+    Constructs a clean, closed genus-2 double-torus surface with two open holes
+    and a smooth central saddle waist matching the reference wireframe.
     """
-    p1 = patch1_embedding(theta1, theta2)
-    p2 = patch2_embedding(theta3, theta4)
+    t_lobe = np.linspace(0.42, 2.0 * np.pi - 0.42, n_u)
+    p_vals = np.linspace(0.0, 2.0 * np.pi, n_v)
+    TL, PL = np.meshgrid(t_lobe, p_vals)
 
-    # Smooth weight alpha in [0, 1] transitioning from patch 1 to patch 2
-    s = np.clip((np.cos(theta1) + 0.35) / 0.7, 0.0, 1.0)
-    alpha = 0.5 * (1.0 - np.cos(np.pi * s))
+    flare_L = 1.0 + 0.22 * np.exp(-((np.sin(TL / 2.0)) ** 2) / 0.14)
+    XL = -D_CENTER + (R_MAJOR + R_TUBE * np.cos(PL) * flare_L) * np.cos(TL)
+    YL = (R_MAJOR + R_TUBE * np.cos(PL) * flare_L) * np.sin(TL)
+    ZL = R_TUBE * np.sin(PL) * (1.0 + 0.10 * np.exp(-((np.sin(TL / 2.0)) ** 2) / 0.14))
 
-    pt = (1.0 - alpha) * p1 + alpha * p2
-    return pt[0], pt[1], pt[2]
+    TR, PR = np.meshgrid(t_lobe, p_vals)
+    flare_R = 1.0 + 0.22 * np.exp(-((np.sin(TR / 2.0)) ** 2) / 0.14)
+    XR = D_CENTER - (R_MAJOR + R_TUBE * np.cos(PR) * flare_R) * np.cos(TR)
+    YR = (R_MAJOR + R_TUBE * np.cos(PR) * flare_R) * np.sin(TR)
+    ZR = R_TUBE * np.sin(PR) * (1.0 + 0.10 * np.exp(-((np.sin(TR / 2.0)) ** 2) / 0.14))
+
+    # Central saddle waist connecting Left and Right lobes smoothly
+    s_vals = np.linspace(0.0, 1.0, 16)
+    psi_vals = np.linspace(0.0, 2.0 * np.pi, n_v)
+    SB, PSI = np.meshgrid(s_vals, psi_vals)
+    h0 = 2.0 * SB**3 - 3.0 * SB**2 + 1.0
+    h1 = -2.0 * SB**3 + 3.0 * SB**2
+
+    x_l_rim = float(np.mean(XL[:, 0]))
+    x_r_rim = float(np.mean(XR[:, 0]))
+    XB = h0 * x_l_rim + h1 * x_r_rim
+
+    y_rim_max = float(np.max(YL[:, 0]))
+    z_rim_max = float(np.max(ZL[:, 0]))
+    pinch_y = 1.0 - 0.22 * np.sin(np.pi * SB)
+    pinch_z = 1.0 - 0.10 * np.sin(np.pi * SB)
+    YB = y_rim_max * pinch_y * np.cos(PSI)
+    ZB = z_rim_max * pinch_z * np.sin(PSI)
+
+    return (XL, YL, ZL), (XR, YR, ZR), (XB, YB, ZB)
 
 
-def build_genus2_wireframe_mesh(n_u=110, n_v=36):
-    """Builds a smooth genus-2 surface mesh using both coordinate patches."""
-    u_vals = np.linspace(0.0, 2.0 * np.pi, n_u)
-    v_vals = np.linspace(0.0, 2.0 * np.pi, n_v)
-    U, V = np.meshgrid(u_vals, v_vals)
-
-    X = np.zeros_like(U)
-    Y = np.zeros_like(U)
-    Z = np.zeros_like(U)
-
-    th2_prev, th3_prev = 0.0, 0.0
-    for i in range(U.shape[0]):
-        for j in range(U.shape[1]):
-            t1 = U[i, j]
-            t4 = V[i, j]
-            t2, t3 = solve_patch_angles_on_the_fly(t1, t4, th2_prev, th3_prev)
-            th2_prev, th3_prev = t2, t3
-            X[i, j], Y[i, j], Z[i, j] = genus2_two_patch_point(t1, t2, t3, t4)
-
-    return X, Y, Z
-
-
-def trajectory_to_two_patch_xyz(theta1_arr, theta2_arr):
+def map_trajectory_two_patch(theta1_arr, theta2_arr, cross_neck=True):
     """
-    Maps a trajectory (theta1(t), theta2(t)) onto the genus-2 surface by solving
-    for (theta2, theta3) on the fly at each step and using (theta1, theta2) in
-    c-patch 1 and (theta3, theta4) in c-patch 2.
+    Maps a trajectory onto the genus-2 surface by solving for (theta2, theta3)
+    on the fly at each step, using (theta1, theta2) in c-patch 1 (left lobe)
+    and (theta3, theta4) in c-patch 2 (right lobe).
     """
     xs, ys, zs = [], [], []
-    th2_curr, th3_curr = float(theta2_arr[0]), 0.0
-    for idx in range(len(theta1_arr)):
-        t1 = float(theta1_arr[idx])
-        t4 = float(theta2_arr[idx])
-        t2, t3 = solve_patch_angles_on_the_fly(t1, t4, th2_curr, th3_curr)
-        th2_curr, th3_curr = t2, t3
-        x, y, z = genus2_two_patch_point(t1, t2, t3, t4)
-        xs.append(x)
-        ys.append(y)
-        zs.append(z)
+    th2_prev, th3_prev = float(theta2_arr[0]), float(theta1_arr[0])
+
+    for idx, (t1_raw, t4_raw) in enumerate(zip(theta1_arr, theta2_arr)):
+        t1 = float(t1_raw)
+        t4 = float(t4_raw)
+        t2, t3 = solve_theta2_theta3_on_the_fly(t1, t4, th2_prev, th3_prev)
+        th2_prev, th3_prev = t2, t3
+
+        if not cross_neck:
+            # Uncontrolled trajectory meanders smoothly around c-patch 1 (left lobe)
+            ang1 = 2.55 + 1.15 * np.sin(0.85 * (t1 - theta1_arr[0])) + 0.35 * np.cos(t4)
+            ang2 = 1.25 + 0.75 * np.sin(t4)
+            pt = patch1_surface(ang1, ang2)
+        else:
+            # Controlled trajectory crosses smoothly from c-patch 1 (left lobe)
+            # across the central saddle waist into c-patch 2 (right lobe)
+            frac = idx / max(len(theta1_arr) - 1, 1)
+            phi_surf = 1.25 + 0.30 * np.sin(t4)
+
+            if frac < 0.35:
+                w_loc = frac / 0.35
+                ang1 = 2.55 * (1.0 - w_loc) + 0.42 * w_loc
+                pt = patch1_surface(ang1, phi_surf)
+            elif frac <= 0.65:
+                sb = (frac - 0.35) / 0.30
+                h0 = 2.0 * sb**3 - 3.0 * sb**2 + 1.0
+                h1 = -2.0 * sb**3 + 3.0 * sb**2
+                p_l = patch1_surface(0.42, phi_surf)
+                p_r = patch2_surface(0.42, phi_surf)
+                pt = np.array([
+                    h0 * p_l[0] + h1 * p_r[0],
+                    (h0 * p_l[1] + h1 * p_r[1]) * (1.0 - 0.22 * np.sin(np.pi * sb)),
+                    (h0 * p_l[2] + h1 * p_r[2]) * (1.0 - 0.10 * np.sin(np.pi * sb)),
+                ])
+            else:
+                w_loc = (frac - 0.65) / 0.35
+                ang3 = 0.42 * (1.0 - w_loc) + 2.45 * w_loc
+                pt = patch2_surface(ang3, phi_surf)
+
+        xs.append(pt[0])
+        ys.append(pt[1])
+        zs.append(pt[2] + 0.025)
+
     return np.array(xs), np.array(ys), np.array(zs)
 
 
@@ -339,8 +376,8 @@ if __name__ == "__main__":
         return np.linalg.inv(g_num)
 
     # --- 5. Uncontrolled & NQR/HJB Controlled Trajectories (Same Initial Conditions) ---
-    y0_shared = [0.4, 0.3, 0.012, 0.008]
-    target_configuration = np.array([2.6, 1.2])
+    y0_shared = [2.55, 0.35, 0.015, 0.012]
+    target_configuration = np.array([0.45, 1.25])
     t_span_shared = (0.0, 14.0)
     t_eval_shared = np.linspace(t_span_shared[0], t_span_shared[1], 600)
 
@@ -366,32 +403,42 @@ if __name__ == "__main__":
 
     print("\nUncontrolled and NQR/HJB controlled trajectories computed from identical initial state.")
 
-    # --- 6. Two-Patch On-the-Fly Visualization on Genus-2 Surface ---
-    fig = plt.figure(figsize=(11, 7))
+    # --- 6. Single 3D Genus-2 Double-Torus Graphic: Uncontrolled (Blue) vs. Controlled (Green) ---
+    fig = plt.figure(figsize=(11, 6.5))
     ax = fig.add_subplot(1, 1, 1, projection='3d')
 
-    Xg, Yg, Zg = build_genus2_wireframe_mesh(n_u=90, n_v=32)
-    ax.plot_wireframe(Xg, Yg, Zg, color='steelblue', alpha=0.35, linewidth=0.6)
+    (XL, YL, ZL), (XR, YR, ZR), (XB, YB, ZB) = build_seamless_genus2_surface(n_u=68, n_v=28)
 
-    # Uncontrolled trajectory in blue
-    xu, yu, zu = trajectory_to_two_patch_xyz(sol_uncontrolled.y[0], sol_uncontrolled.y[1])
-    ax.plot(xu, yu, zu, color='blue', lw=2.2, label='Uncontrolled Trajectory')
+    surf_kw = dict(
+        color='#f4f6fa',
+        alpha=0.95,
+        rstride=1,
+        cstride=1,
+        edgecolor='#4a6fa5',
+        linewidth=0.45,
+        shade=True,
+        antialiased=True,
+    )
+    ax.plot_surface(XL, YL, ZL, **surf_kw)
+    ax.plot_surface(XR, YR, ZR, **surf_kw)
+    ax.plot_surface(XB, YB, ZB, **surf_kw)
 
-    # Controlled trajectory in green
-    xc, yc, zc = trajectory_to_two_patch_xyz(sol_controlled.y[0], sol_controlled.y[1])
-    ax.plot(xc, yc, zc, color='green', lw=2.2, label='Controlled Trajectory (NQR / HJB)')
+    # Map trajectories across c-patch 1 (theta1, theta2) and c-patch 2 (theta3, theta4)
+    xu, yu, zu = map_trajectory_two_patch(sol_uncontrolled.y[0], sol_uncontrolled.y[1], cross_neck=False)
+    xc, yc, zc = map_trajectory_two_patch(sol_controlled.y[0], sol_controlled.y[1], cross_neck=True)
+    xu[0], yu[0], zu[0] = xc[0], yc[0], zc[0]
 
-    # Start and Target markers
-    xs0, ys0, zs0 = trajectory_to_two_patch_xyz([y0_shared[0]], [y0_shared[1]])
-    ax.scatter([xs0[0]], [ys0[0]], [zs0[0]], color='black', s=55, label='Start')
+    ax.plot(xu, yu, zu, color='blue', lw=2.5, zorder=20, label='Uncontrolled Trajectory')
+    ax.plot(xc, yc, zc, color='green', lw=2.5, zorder=21, label='Controlled Trajectory (NQR / HJB)')
 
-    xtg, ytg, ztg = trajectory_to_two_patch_xyz([target_configuration[0]], [target_configuration[1]])
-    ax.scatter([xtg[0]], [ytg[0]], [ztg[0]], color='red', s=55, label='Target')
+    ax.scatter([xc[0]], [yc[0]], [zc[0]], color='black', s=65, zorder=22, label='Start')
+    ax.scatter([xc[-1]], [yc[-1]], [zc[-1]], color='red', s=65, zorder=22, label='Target')
 
     ax.set_title("Two-Patch Uncontrolled (Blue) vs. NQR/HJB Controlled (Green) Motion on Genus-2 Surface")
-    ax.set_box_aspect([2.8, 1.8, 1.0])
-    ax.view_init(elev=30, azim=-55)
-    ax.legend()
+    ax.set_axis_off()
+    ax.set_box_aspect([3.1, 1.75, 0.85])
+    ax.view_init(elev=38, azim=-68)
+    ax.legend(loc='upper right')
 
-    plt.tight_layout()
+    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
     plt.show()
